@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2021 Thomas Akehurst
+ * Copyright (C) 2020-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,27 +16,38 @@
 package com.github.tomakehurst.wiremock.extension.responsetemplating.helpers;
 
 import com.github.jknack.handlebars.Options;
-import com.google.common.collect.ImmutableList;
 import java.io.IOException;
-import java.util.List;
+import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
 
 public class PickRandomHelper extends HandlebarsHelper<Object> {
 
-  @SuppressWarnings("unchecked")
   @Override
+  @SuppressWarnings("unchecked")
   public Object apply(Object context, Options options) throws IOException {
     if (context == null) {
       return this.handleError(
           "Must specify either a single list argument or a set of single value arguments.");
     }
 
-    List<Object> valueList =
-        (Iterable.class.isAssignableFrom(context.getClass()))
-            ? ImmutableList.copyOf((Iterable<Object>) context)
-            : ImmutableList.builder().add(context).add(options.params).build();
+    List<Object> valueList = new ArrayList<>();
+    if (Iterable.class.isAssignableFrom(context.getClass())) {
+      ((Iterable<Object>) context).forEach(valueList::add);
+    } else {
+      valueList.add(context);
+      valueList.addAll(Arrays.asList(options.params));
+    }
+
+    Integer count = (Integer) options.hash.get("count");
+    if (count != null && count > 0) {
+      int desiredLength = Math.min(valueList.size(), count);
+      for (int i = 0; i < desiredLength; i++) {
+        Collections.swap(valueList, i, ThreadLocalRandom.current().nextInt(i, valueList.size()));
+      }
+      return valueList.subList(0, desiredLength);
+    }
 
     int index = ThreadLocalRandom.current().nextInt(valueList.size());
-    return valueList.get(index).toString();
+    return valueList.get(index);
   }
 }

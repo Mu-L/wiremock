@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022-2023 Thomas Akehurst
+ * Copyright (C) 2022-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,16 +16,20 @@
 package com.github.tomakehurst.wiremock.stubbing;
 
 import static com.github.tomakehurst.wiremock.common.LocalNotifier.notifier;
+import static com.github.tomakehurst.wiremock.common.Pair.pair;
+import static com.github.tomakehurst.wiremock.common.ParameterUtils.getFirstNonNull;
+import static com.github.tomakehurst.wiremock.extension.ServeEventListener.RequestPhase.AFTER_MATCH;
+import static com.github.tomakehurst.wiremock.extension.ServeEventListenerUtils.triggerListeners;
 import static com.github.tomakehurst.wiremock.http.ResponseDefinition.copyOf;
-import static com.google.common.base.MoreObjects.firstNonNull;
 import static java.util.stream.Collectors.toList;
 
 import com.github.tomakehurst.wiremock.admin.NotFoundException;
+import com.github.tomakehurst.wiremock.common.Errors;
 import com.github.tomakehurst.wiremock.common.FileSource;
+import com.github.tomakehurst.wiremock.common.InvalidInputException;
 import com.github.tomakehurst.wiremock.common.Json;
-import com.github.tomakehurst.wiremock.extension.Parameters;
-import com.github.tomakehurst.wiremock.extension.ResponseDefinitionTransformer;
-import com.github.tomakehurst.wiremock.extension.StubLifecycleListener;
+import com.github.tomakehurst.wiremock.common.Pair;
+import com.github.tomakehurst.wiremock.extension.*;
 import com.github.tomakehurst.wiremock.http.Request;
 import com.github.tomakehurst.wiremock.http.ResponseDefinition;
 import com.github.tomakehurst.wiremock.matching.RequestMatcherExtension;
@@ -33,42 +37,49 @@ import com.github.tomakehurst.wiremock.matching.StringValuePattern;
 import com.github.tomakehurst.wiremock.store.BlobStore;
 import com.github.tomakehurst.wiremock.store.StubMappingStore;
 import com.github.tomakehurst.wiremock.store.files.BlobStoreFileSource;
-import com.google.common.collect.ImmutableList;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.UUID;
+import com.github.tomakehurst.wiremock.verification.LoggedRequest;
+import java.util.*;
 
 public abstract class AbstractStubMappings implements StubMappings {
 
+  protected final StubMappingStore store;
   protected final Scenarios scenarios;
   protected final Map<String, RequestMatcherExtension> customMatchers;
   protected final Map<String, ResponseDefinitionTransformer> transformers;
+  protected final Map<String, ResponseDefinitionTransformerV2> v2transformers;
   protected final FileSource filesFileSource;
   protected final List<StubLifecycleListener> stubLifecycleListeners;
-  protected final StubMappingStore store;
+  protected final Map<String, ServeEventListener> serveEventListeners;
 
   public AbstractStubMappings(
       StubMappingStore store,
       Scenarios scenarios,
       Map<String, RequestMatcherExtension> customMatchers,
       Map<String, ResponseDefinitionTransformer> transformers,
+      Map<String, ResponseDefinitionTransformerV2> v2transformers,
       BlobStore filesBlobStore,
-      List<StubLifecycleListener> stubLifecycleListeners) {
-
+      List<StubLifecycleListener> stubLifecycleListeners,
+      Map<String, ServeEventListener> serveEventListeners) {
     this.store = store;
     this.scenarios = scenarios;
     this.customMatchers = customMatchers;
     this.transformers = transformers;
+    this.v2transformers = v2transformers;
     this.filesFileSource = new BlobStoreFileSource(filesBlobStore);
     this.stubLifecycleListeners = stubLifecycleListeners;
+    this.serveEventListeners = serveEventListeners;
   }
 
   @Override
-  public ServeEvent serveFor(Request request) {
-    StubMapping matchingMapping =
+  public ServeEvent serveFor(ServeEvent initialServeEvent) {
+    initialServeEvent = initialServeEvent.withIdDecoratedRequest();
+    final LoggedRequest request = initialServeEvent.getRequest();
+
+    final List<SubEvent> subEvents = new LinkedList<>();
+
+    StubMapping matchingStub =
         store
-            .findAllMatchingRequest(request, customMatchers)
+            .findAllMatchingRequest(request, customMatchers, subEvents::add)
             .filter(
                 stubMapping ->
                     stubMapping.isIndependentOfScenarioState()
@@ -76,25 +87,38 @@ public abstract class AbstractStubMappings implements StubMappings {
             .findFirst()
             .orElse(StubMapping.NOT_CONFIGURED);
 
-    scenarios.onStubServed(matchingMapping);
+    subEvents.forEach(initialServeEvent::appendSubEvent);
 
-    ServeEvent serveEvent = ServeEvent.of(request, matchingMapping);
-    ServeEvent.setCurrent(serveEvent);
+    scenarios.onStubServed(matchingStub);
+
+    final ResponseDefinition initialResponseDefinition = matchingStub.getResponse();
+    ServeEvent serveEvent =
+        initialServeEvent
+            .withStubMapping(matchingStub)
+            .withResponseDefinition(initialResponseDefinition)
+            .withPathParamDecoratedRequest();
+
+    triggerListeners(serveEventListeners, AFTER_MATCH, serveEvent);
 
     ResponseDefinition responseDefinition =
-        applyTransformations(
-            request, matchingMapping.getResponse(), ImmutableList.copyOf(transformers.values()));
+        applyV1Transformations(
+            request, matchingStub.getResponse(), List.copyOf(transformers.values()));
 
-    serveEvent = serveEvent.withResponseDefinition(copyOf(responseDefinition));
-    ServeEvent.setCurrent(serveEvent);
+    serveEvent = serveEvent.withResponseDefinition(responseDefinition);
 
-    return serveEvent;
+    final Pair<ServeEvent, ResponseDefinition> transformed =
+        applyV2Transformations(serveEvent, List.copyOf(v2transformers.values()));
+    serveEvent = transformed.a;
+    responseDefinition = transformed.b;
+
+    return serveEvent.withResponseDefinition(copyOf(responseDefinition));
   }
 
-  private ResponseDefinition applyTransformations(
+  private ResponseDefinition applyV1Transformations(
       Request request,
       ResponseDefinition responseDefinition,
       List<ResponseDefinitionTransformer> transformers) {
+
     if (transformers.isEmpty()) {
       return responseDefinition;
     }
@@ -106,15 +130,45 @@ public abstract class AbstractStubMappings implements StubMappings {
                 request,
                 responseDefinition,
                 filesFileSource,
-                firstNonNull(responseDefinition.getTransformerParameters(), Parameters.empty()))
+                getFirstNonNull(responseDefinition.getTransformerParameters(), Parameters.empty()))
             : responseDefinition;
 
-    return applyTransformations(
+    return applyV1Transformations(
         request, newResponseDef, transformers.subList(1, transformers.size()));
+  }
+
+  private Pair<ServeEvent, ResponseDefinition> applyV2Transformations(
+      ServeEvent serveEvent, List<ResponseDefinitionTransformerV2> transformers) {
+
+    final ResponseDefinition responseDefinition = serveEvent.getResponseDefinition();
+
+    if (transformers.isEmpty()) {
+      return pair(serveEvent, responseDefinition);
+    }
+
+    ResponseDefinitionTransformerV2 transformer = transformers.get(0);
+    ResponseDefinition newResponseDef =
+        transformer.applyGlobally() || responseDefinition.hasTransformer(transformer)
+            ? transformer.transform(serveEvent)
+            : responseDefinition;
+
+    return applyV2Transformations(
+        serveEvent.withResponseDefinition(newResponseDef),
+        transformers.subList(1, transformers.size()));
   }
 
   @Override
   public void addMapping(StubMapping mapping) {
+    if (store.get(mapping.getId()).isPresent()) {
+      String msg =
+          "ID of the provided stub mapping '"
+              + mapping.getUuid()
+              + "' is already taken by another stub mapping";
+      notifier().error(msg);
+      throw new InvalidInputException(
+          Errors.singleWithDetail(109, "Duplicate stub mapping ID", msg));
+    }
+
     for (StubLifecycleListener listener : stubLifecycleListeners) {
       listener.beforeStubCreated(mapping);
     }
@@ -145,7 +199,7 @@ public abstract class AbstractStubMappings implements StubMappings {
   public void editMapping(StubMapping stubMapping) {
     final Optional<StubMapping> optionalExistingMapping = store.get(stubMapping.getId());
 
-    if (!optionalExistingMapping.isPresent()) {
+    if (optionalExistingMapping.isEmpty()) {
       String msg = "StubMapping with UUID: " + stubMapping.getUuid() + " not found";
       notifier().error(msg);
       throw new NotFoundException(msg);
@@ -188,7 +242,7 @@ public abstract class AbstractStubMappings implements StubMappings {
 
   @Override
   public List<StubMapping> getAll() {
-    return ImmutableList.copyOf(store.getAll().collect(toList()));
+    return store.getAll().collect(toList());
   }
 
   @Override

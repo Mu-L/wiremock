@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016-2022 Thomas Akehurst
+ * Copyright (C) 2016-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,14 +16,13 @@
 package com.github.tomakehurst.wiremock;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
-import static com.google.common.collect.FluentIterable.from;
 import static java.util.Arrays.asList;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
 
 import com.github.tomakehurst.wiremock.stubbing.StubMapping;
-import com.google.common.base.Predicate;
 import java.util.UUID;
+import java.util.function.Predicate;
 import org.junit.jupiter.api.Test;
 
 public class RemoveStubMappingAcceptanceTest extends AcceptanceTestBase {
@@ -136,16 +135,43 @@ public class RemoveStubMappingAcceptanceTest extends AcceptanceTestBase {
     assertThat(getMatchingStubCount("/stb-1", "/stb-2"), is(2));
   }
 
+  @Test
+  public void removeStubWithUUIDThatExists() {
+
+    UUID id1 = UUID.randomUUID();
+
+    stubFor(get(urlEqualTo("/stub-1")).withId(id1).willReturn(aResponse().withBody("Stub-1-Body")));
+
+    assertThat(testClient.get("/stub-1").content(), is("Stub-1-Body"));
+
+    assertThat(getMatchingStubCount("/stub-1", ""), is(1));
+
+    removeStub(id1);
+
+    assertThat(getMatchingStubCount("/stub-1", ""), is(0));
+  }
+
+  @Test
+  public void removeStubWithUUIDThatDoesNotExists() {
+
+    UUID id1 = UUID.randomUUID();
+
+    stubFor(get(urlEqualTo("/stb-1")).withId(id1).willReturn(aResponse().withBody("Stb-1-Body")));
+
+    assertThat(testClient.get("/stb-1").content(), is("Stb-1-Body"));
+
+    removeStub(id1);
+
+    assertThat(getMatchingStubCount("/stb-1", ""), is(0));
+  }
+
   private Predicate<StubMapping> withAnyOf(final String... urls) {
-    return new Predicate<StubMapping>() {
-      public boolean apply(StubMapping mapping) {
-        return mapping.getRequest().getUrl() != null
+    return mapping ->
+        mapping.getRequest().getUrl() != null
             && asList(urls).contains(mapping.getRequest().getUrl());
-      }
-    };
   }
 
   private synchronized int getMatchingStubCount(String url1, String url2) {
-    return from(listAllStubMappings().getMappings()).filter(withAnyOf(url1, url2)).size();
+    return (int) listAllStubMappings().getMappings().stream().filter(withAnyOf(url1, url2)).count();
   }
 }

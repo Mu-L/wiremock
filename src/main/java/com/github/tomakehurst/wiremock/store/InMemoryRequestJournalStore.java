@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022 Thomas Akehurst
+ * Copyright (C) 2022-2023 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,29 +16,35 @@
 package com.github.tomakehurst.wiremock.store;
 
 import com.github.tomakehurst.wiremock.stubbing.ServeEvent;
-import java.util.Optional;
-import java.util.Queue;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.stream.Stream;
+import org.wiremock.annotations.Beta;
 
+@Beta(justification = "Externalized State API: https://github.com/wiremock/wiremock/issues/2144")
 public class InMemoryRequestJournalStore implements RequestJournalStore {
 
-  private final Queue<ServeEvent> serveEvents = new ConcurrentLinkedQueue<>();
+  private final Deque<UUID> deque = new ConcurrentLinkedDeque<>();
+  private final Map<UUID, ServeEvent> serveEvents = new ConcurrentHashMap<>();
 
   @Override
   public void add(ServeEvent event) {
-    serveEvents.add(event);
+    serveEvents.put(event.getId(), event);
+    deque.addFirst(event.getId());
   }
 
   @Override
   public Stream<ServeEvent> getAll() {
-    return serveEvents.stream();
+    return deque.stream().map(serveEvents::get).filter(Objects::nonNull);
   }
 
   @Override
   public void removeLast() {
-    serveEvents.poll();
+    final UUID id = deque.pollLast();
+    if (id != null) {
+      serveEvents.remove(id);
+    }
   }
 
   @Override
@@ -48,21 +54,25 @@ public class InMemoryRequestJournalStore implements RequestJournalStore {
 
   @Override
   public Optional<ServeEvent> get(UUID id) {
-    return serveEvents.stream().filter(event -> event.getId().equals(id)).findFirst();
+    return Optional.ofNullable(serveEvents.get(id));
   }
 
   @Override
-  public void put(UUID key, ServeEvent event) {
-    add(event);
+  public void put(UUID id, ServeEvent event) {
+    if (deque.contains(id)) {
+      serveEvents.put(id, event);
+    }
   }
 
   @Override
-  public void remove(UUID key) {
-    get(key).ifPresent(serveEvents::remove);
+  public void remove(UUID id) {
+    deque.stream().filter(eventId -> eventId.equals(id)).forEach(deque::remove);
+    serveEvents.remove(id);
   }
 
   @Override
   public void clear() {
+    deque.clear();
     serveEvents.clear();
   }
 }

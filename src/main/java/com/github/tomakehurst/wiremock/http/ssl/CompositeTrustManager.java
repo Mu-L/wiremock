@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2021 Thomas Akehurst
+ * Copyright (C) 2020-2023 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -68,77 +68,41 @@ class CompositeTrustManager extends X509ExtendedTrustManager {
   @Override
   public void checkClientTrusted(final X509Certificate[] chain, final String authType)
       throws CertificateException {
-    checkAllTrustManagers(
-        new CertificateChecker() {
-          @Override
-          public void check(X509ExtendedTrustManager tm) throws CertificateException {
-            tm.checkClientTrusted(chain, authType);
-          }
-        });
+    checkAllTrustManagers(tm -> tm.checkClientTrusted(chain, authType));
   }
 
   @Override
   public void checkServerTrusted(final X509Certificate[] chain, final String authType)
       throws CertificateException {
-    checkAllTrustManagers(
-        new CertificateChecker() {
-          @Override
-          public void check(X509ExtendedTrustManager tm) throws CertificateException {
-            tm.checkServerTrusted(chain, authType);
-          }
-        });
+    checkAllTrustManagers(tm -> tm.checkServerTrusted(chain, authType));
   }
 
   @Override
   public void checkClientTrusted(
       final X509Certificate[] chain, final String authType, final Socket socket)
       throws CertificateException {
-    checkAllTrustManagers(
-        new CertificateChecker() {
-          @Override
-          public void check(X509ExtendedTrustManager tm) throws CertificateException {
-            tm.checkClientTrusted(chain, authType, socket);
-          }
-        });
+    checkAllTrustManagers(tm -> tm.checkClientTrusted(chain, authType, socket));
   }
 
   @Override
   public void checkServerTrusted(
       final X509Certificate[] chain, final String authType, final Socket socket)
       throws CertificateException {
-    checkAllTrustManagers(
-        new CertificateChecker() {
-          @Override
-          public void check(X509ExtendedTrustManager tm) throws CertificateException {
-            tm.checkServerTrusted(chain, authType, socket);
-          }
-        });
+    checkAllTrustManagers(tm -> tm.checkServerTrusted(chain, authType, socket));
   }
 
   @Override
   public void checkClientTrusted(
       final X509Certificate[] chain, final String authType, final SSLEngine engine)
       throws CertificateException {
-    checkAllTrustManagers(
-        new CertificateChecker() {
-          @Override
-          public void check(X509ExtendedTrustManager tm) throws CertificateException {
-            tm.checkClientTrusted(chain, authType, engine);
-          }
-        });
+    checkAllTrustManagers(tm -> tm.checkClientTrusted(chain, authType, engine));
   }
 
   @Override
   public void checkServerTrusted(
       final X509Certificate[] chain, final String authType, final SSLEngine engine)
       throws CertificateException {
-    checkAllTrustManagers(
-        new CertificateChecker() {
-          @Override
-          public void check(X509ExtendedTrustManager tm) throws CertificateException {
-            tm.checkServerTrusted(chain, authType, engine);
-          }
-        });
+    checkAllTrustManagers(tm -> tm.checkServerTrusted(chain, authType, engine));
   }
 
   @Override

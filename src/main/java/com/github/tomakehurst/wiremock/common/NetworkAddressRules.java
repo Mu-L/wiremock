@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022 Thomas Akehurst
+ * Copyright (C) 2023-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,37 +15,26 @@
  */
 package com.github.tomakehurst.wiremock.common;
 
-import static com.github.tomakehurst.wiremock.common.NetworkAddressRange.ALL;
+import static com.github.tomakehurst.wiremock.common.NetworkAddressRange.ALL_RANGES;
 import static java.util.Collections.emptySet;
 
-import com.google.common.collect.ImmutableSet;
+import java.util.HashSet;
 import java.util.Set;
 
-public class NetworkAddressRules {
+public interface NetworkAddressRules {
+  NetworkAddressRules ALLOW_ALL = new DefaultNetworkAddressRules(ALL_RANGES, emptySet());
 
-  public static Builder builder() {
+  static Builder builder() {
     return new Builder();
   }
 
-  private final Set<NetworkAddressRange> allowed;
-  private final Set<NetworkAddressRange> denied;
+  boolean isAllowed(String testValue);
 
-  public static NetworkAddressRules ALLOW_ALL =
-      new NetworkAddressRules(ImmutableSet.of(ALL), emptySet());
-
-  public NetworkAddressRules(Set<NetworkAddressRange> allowed, Set<NetworkAddressRange> denied) {
-    this.allowed = allowed;
-    this.denied = denied;
-  }
-
-  public boolean isAllowed(String testValue) {
-    return allowed.stream().anyMatch(rule -> rule.isIncluded(testValue))
-        && denied.stream().noneMatch(rule -> rule.isIncluded(testValue));
-  }
+  boolean isAllowedAll();
 
   public static class Builder {
-    private final ImmutableSet.Builder<NetworkAddressRange> allowed = ImmutableSet.builder();
-    private final ImmutableSet.Builder<NetworkAddressRange> denied = ImmutableSet.builder();
+    private final Set<NetworkAddressRange> allowed = new HashSet<>();
+    private final Set<NetworkAddressRange> denied = new HashSet<>();
 
     public Builder allow(String expression) {
       allowed.add(NetworkAddressRange.of(expression));
@@ -58,11 +47,11 @@ public class NetworkAddressRules {
     }
 
     public NetworkAddressRules build() {
-      Set<NetworkAddressRange> allowedRanges = allowed.build();
+      Set<NetworkAddressRange> allowedRanges = allowed;
       if (allowedRanges.isEmpty()) {
-        allowedRanges = ImmutableSet.of(ALL);
+        allowedRanges = ALL_RANGES;
       }
-      return new NetworkAddressRules(allowedRanges, denied.build());
+      return new DefaultNetworkAddressRules(Set.copyOf(allowedRanges), Set.copyOf(denied));
     }
   }
 }

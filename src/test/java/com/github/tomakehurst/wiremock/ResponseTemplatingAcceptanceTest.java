@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016-2023 Thomas Akehurst
+ * Copyright (C) 2016-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,12 +17,12 @@ package com.github.tomakehurst.wiremock;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.options;
+import static com.github.tomakehurst.wiremock.testsupport.ServeEventChecks.assertMessageSubEventPresent;
 import static com.github.tomakehurst.wiremock.testsupport.TestFiles.defaultTestFilesRoot;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.notNullValue;
 
-import com.github.tomakehurst.wiremock.extension.responsetemplating.ResponseTemplateTransformer;
 import com.github.tomakehurst.wiremock.junit5.WireMockExtension;
 import com.github.tomakehurst.wiremock.testsupport.WireMatchers;
 import com.github.tomakehurst.wiremock.testsupport.WireMockResponse;
@@ -33,6 +33,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junitpioneer.jupiter.ClearSystemProperty;
 
 public class ResponseTemplatingAcceptanceTest {
 
@@ -44,7 +45,7 @@ public class ResponseTemplatingAcceptanceTest {
     @RegisterExtension
     public WireMockExtension wm =
         WireMockExtension.newInstance()
-            .options(options().dynamicPort().extensions(new ResponseTemplateTransformer(false)))
+            .options(options().dynamicPort().templatingEnabled(true).globalTemplating(false))
             .build();
 
     @BeforeEach
@@ -62,6 +63,20 @@ public class ResponseTemplatingAcceptanceTest {
                       .withTransformers("response-template")));
 
       assertThat(client.get("/templated").content(), is("templated"));
+    }
+
+    @Test
+    public void doesNotIncludeQueryParametersInPathVariableValue() {
+      wm.stubFor(
+          get(urlPathTemplate("/{template_param}"))
+              .willReturn(
+                  aResponse()
+                      .withBody("{ \"key\": \"{{{ request.path.template_param }}}\" }")
+                      .withTransformers("response-template")));
+
+      String content = client.get("/foo?bar=1").content();
+
+      assertThat(content, is("{ \"key\": \"foo\" }"));
     }
 
     @Test
@@ -86,7 +101,8 @@ public class ResponseTemplatingAcceptanceTest {
                 options()
                     .dynamicPort()
                     .withRootDirectory(defaultTestFilesRoot())
-                    .extensions(new ResponseTemplateTransformer(true)))
+                    .templatingEnabled(true)
+                    .globalTemplating(true))
             .build();
 
     @BeforeEach
@@ -152,7 +168,7 @@ public class ResponseTemplatingAcceptanceTest {
       assertThat(response.content(), is("one"));
       assertThat(response.firstHeader("X-Value"), is("one"));
 
-      wm.stubFor(
+      wm.editStub(
           get(urlPathEqualTo(url))
               .withId(id)
               .willReturn(
@@ -167,17 +183,14 @@ public class ResponseTemplatingAcceptanceTest {
 
     @Test
     public void supportsDisablingTemplatingOfBodyFilesPerStub() {
-      UUID id = UUID.randomUUID();
       wm.stubFor(
           get(urlPathEqualTo("/templated"))
-              .withId(id)
               .willReturn(aResponse().withBodyFile("templated-example-1.txt")));
 
       assertThat(client.get("/templated").content(), is("templated"));
 
       wm.stubFor(
           get(urlPathEqualTo("/templated"))
-              .withId(id)
               .willReturn(
                   aResponse()
                       .withBodyFile("templated-example-1.txt")
@@ -187,7 +200,6 @@ public class ResponseTemplatingAcceptanceTest {
 
       wm.stubFor(
           get(urlPathMatching("/templated/.*"))
-              .withId(id)
               .willReturn(
                   aResponse()
                       .withBodyFile("templated-example-{{request.path.1}}.txt")
@@ -284,7 +296,7 @@ public class ResponseTemplatingAcceptanceTest {
     }
 
     @Test
-    void canReadNumericPathVariableValuesWhenUsingPathTemnplate() {
+    void canReadNumericPathVariableValuesWhenUsingPathTemplate() {
       wm.stubFor(
           get(urlPathTemplate("/v1/first/{0}/second/{1}"))
               .willReturn(ok("1: {{request.path.0}}, 2: {{request.path.1}}")));
@@ -304,6 +316,27 @@ public class ResponseTemplatingAcceptanceTest {
 
       assertThat(content, is(" v1 first first1 second second2 "));
     }
+
+    @Test
+    void bodyAsBase64IsAvailableOnTheRequestModel() {
+      wm.stubFor(post("/v1/base64").willReturn(ok("{{request.bodyAsBase64}}")));
+
+      String content = client.postJson("/v1/base64", "{'foo':'bar'}").content();
+
+      assertThat(content, is("eydmb28nOidiYXInfQ=="));
+    }
+
+    @Test
+    void exceptionThrownWhileRenderingIsReportedViaSubEvent() {
+      wm.stubFor(get("/bad").willReturn(ok("{{math '1' '/' 0}}")));
+
+      WireMockResponse response = client.get("/bad");
+
+      assertThat(response.statusCode(), is(500));
+      assertThat(response.content(), is("1:2: java.lang.ArithmeticException: / by zero"));
+
+      assertMessageSubEventPresent(wm, "ERROR", "1:2: java.lang.ArithmeticException: / by zero");
+    }
   }
 
   @Nested
@@ -318,11 +351,8 @@ public class ResponseTemplatingAcceptanceTest {
                 options()
                     .dynamicPort()
                     .withRootDirectory(defaultTestFilesRoot())
-                    .extensions(
-                        new ResponseTemplateTransformer.Builder()
-                            .global(true)
-                            .permittedSystemKeys("allowed.*")
-                            .build()))
+                    .withPermittedSystemKeys("allowed.*")
+                    .globalTemplating(true))
             .build();
 
     @BeforeEach
@@ -341,6 +371,7 @@ public class ResponseTemplatingAcceptanceTest {
     }
 
     @Test
+    @ClearSystemProperty(key = "allowed.thing")
     public void rendersPermittedSystemProperty() {
       System.setProperty("allowed.thing", "123");
 
@@ -353,6 +384,7 @@ public class ResponseTemplatingAcceptanceTest {
     }
 
     @Test
+    @ClearSystemProperty(key = "forbidden.thing")
     public void refusesToRenderForbiddenSystemProperty() {
       System.setProperty("forbidden.thing", "456");
 
@@ -372,6 +404,73 @@ public class ResponseTemplatingAcceptanceTest {
               .willReturn(aResponse().withBody("{{systemValue type='ENVIRONMENT' key='PATH'}}")));
 
       assertThat(client.get("/templated").content(), notNullValue());
+    }
+  }
+
+  @Nested
+  class NoEscaping {
+
+    WireMockTestClient client;
+
+    @RegisterExtension
+    public WireMockExtension wm =
+        WireMockExtension.newInstance()
+            .options(
+                options()
+                    .dynamicPort()
+                    .withRootDirectory(defaultTestFilesRoot())
+                    .templatingEnabled(true)
+                    .globalTemplating(true))
+            .build();
+
+    @BeforeEach
+    public void init() {
+      client = new WireMockTestClient(wm.getPort());
+    }
+
+    @Test
+    void escapingIsDisabledByDefault() {
+      wm.stubFor(
+          post("/noescape").willReturn(ok("{\"test\": \"{{jsonPath request.body '$.a.test'}}\"}")));
+
+      WireMockResponse response =
+          client.postJson("/noescape", "{\"a\": {\"test\": \"look at my 'single quotes'\"}}");
+
+      assertThat(response.content(), is("{\"test\": \"look at my 'single quotes'\"}"));
+    }
+  }
+
+  @Nested
+  class Escaping {
+
+    WireMockTestClient client;
+
+    @RegisterExtension
+    public WireMockExtension wm =
+        WireMockExtension.newInstance()
+            .options(
+                options()
+                    .dynamicPort()
+                    .withRootDirectory(defaultTestFilesRoot())
+                    .templatingEnabled(true)
+                    .globalTemplating(true)
+                    .withTemplateEscapingDisabled(false))
+            .build();
+
+    @BeforeEach
+    public void init() {
+      client = new WireMockTestClient(wm.getPort());
+    }
+
+    @Test
+    void escapingIsEnabled() {
+      wm.stubFor(
+          post("/noescape").willReturn(ok("{\"test\": \"{{jsonPath request.body '$.a.test'}}\"}")));
+
+      WireMockResponse response =
+          client.postJson("/noescape", "{\"a\": {\"test\": \"look at my 'single quotes'\"}}");
+
+      assertThat(response.content(), is("{\"test\": \"look at my &#x27;single quotes&#x27;\"}"));
     }
   }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013-2021 Thomas Akehurst
+ * Copyright (C) 2013-2023 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 package com.github.tomakehurst.wiremock;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
+import static com.github.tomakehurst.wiremock.common.ResourceUtil.getResource;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 import static com.github.tomakehurst.wiremock.testsupport.TestFiles.*;
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -28,7 +29,7 @@ import com.github.tomakehurst.wiremock.core.Options;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
 import com.github.tomakehurst.wiremock.http.Fault;
 import com.github.tomakehurst.wiremock.http.HttpClientFactory;
-import com.google.common.io.Resources;
+import com.github.tomakehurst.wiremock.stubbing.ServeEvent;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.net.SocketException;
@@ -60,7 +61,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.DisabledOnOs;
 import org.junit.jupiter.api.condition.OS;
 
-public class HttpsAcceptanceTest {
+class HttpsAcceptanceTest {
 
   private WireMockServer wireMockServer;
   private WireMockServer proxy;
@@ -78,7 +79,7 @@ public class HttpsAcceptanceTest {
   }
 
   @Test
-  public void shouldReturnStubOnSpecifiedPort() throws Exception {
+  void shouldReturnStubOnSpecifiedPort() throws Exception {
     startServerWithDefaultKeystore();
     stubFor(
         get(urlEqualTo("/https-test"))
@@ -88,7 +89,7 @@ public class HttpsAcceptanceTest {
   }
 
   @Test
-  public void shouldReturnOnlyOnHttpsWhenHttpDisabled() throws Exception {
+  void shouldReturnOnlyOnHttpsWhenHttpDisabled() throws Exception {
     Throwable exception =
         assertThrows(
             IllegalStateException.class,
@@ -119,7 +120,7 @@ public class HttpsAcceptanceTest {
       value = OS.WINDOWS,
       disabledReason =
           "This feature does not work on Windows " + "because of differing native socket behaviour")
-  public void connectionResetByPeerFault() throws IOException {
+  void connectionResetByPeerFault() throws IOException {
     startServerWithDefaultKeystore();
     stubFor(
         get(urlEqualTo("/connection/reset"))
@@ -136,7 +137,7 @@ public class HttpsAcceptanceTest {
   }
 
   @Test
-  public void emptyResponseFault() {
+  void emptyResponseFault() {
     startServerWithDefaultKeystore();
     stubFor(
         get(urlEqualTo("/empty/response")).willReturn(aResponse().withFault(Fault.EMPTY_RESPONSE)));
@@ -146,7 +147,7 @@ public class HttpsAcceptanceTest {
   }
 
   @Test
-  public void malformedResponseChunkFault() {
+  void malformedResponseChunkFault() {
     startServerWithDefaultKeystore();
     stubFor(
         get(urlEqualTo("/malformed/response"))
@@ -157,7 +158,7 @@ public class HttpsAcceptanceTest {
   }
 
   @Test
-  public void randomDataOnSocketFault() {
+  void randomDataOnSocketFault() {
     startServerWithDefaultKeystore();
     stubFor(
         get(urlEqualTo("/random/data"))
@@ -168,18 +169,19 @@ public class HttpsAcceptanceTest {
   }
 
   @Test
-  public void throwsExceptionWhenBadAlternativeKeystore() {
+  void throwsExceptionWhenBadAlternativeKeystore() {
     assertThrows(
         Exception.class,
         () -> {
-          String testKeystorePath = Resources.getResource("bad-keystore").toString();
+          String testKeystorePath =
+              getResource(HttpsAcceptanceTest.class, "bad-keystore").toString();
           startServerWithKeystore(testKeystorePath);
         });
   }
 
   @Test
-  public void acceptsAlternativeKeystore() throws Exception {
-    String testKeystorePath = Resources.getResource("test-keystore").toString();
+  void acceptsAlternativeKeystore() throws Exception {
+    String testKeystorePath = getResource(HttpsAcceptanceTest.class, "test-keystore").toString();
     startServerWithKeystore(testKeystorePath);
     stubFor(
         get(urlEqualTo("/https-test"))
@@ -189,8 +191,9 @@ public class HttpsAcceptanceTest {
   }
 
   @Test
-  public void acceptsAlternativeKeystoreWithNonDefaultPassword() throws Exception {
-    String testKeystorePath = Resources.getResource("test-keystore-pwd").toString();
+  void acceptsAlternativeKeystoreWithNonDefaultPassword() throws Exception {
+    String testKeystorePath =
+        getResource(HttpsAcceptanceTest.class, "test-keystore-pwd").toString();
     startServerWithKeystore(testKeystorePath, "nondefaultpass", "password");
     stubFor(
         get(urlEqualTo("/https-test"))
@@ -200,8 +203,9 @@ public class HttpsAcceptanceTest {
   }
 
   @Test
-  public void acceptsAlternativeKeystoreWithNonDefaultKeyManagerPassword() throws Exception {
-    String keystorePath = Resources.getResource("test-keystore-key-man-pwd").toString();
+  void acceptsAlternativeKeystoreWithNonDefaultKeyManagerPassword() throws Exception {
+    String keystorePath =
+        getResource(HttpsAcceptanceTest.class, "test-keystore-key-man-pwd").toString();
     startServerWithKeystore(keystorePath, "password", "anotherpassword");
     stubFor(
         get(urlEqualTo("/alt-password-https"))
@@ -211,9 +215,10 @@ public class HttpsAcceptanceTest {
   }
 
   @Test
-  public void failsToStartWithAlternativeKeystoreWithWrongKeyManagerPassword() {
+  void failsToStartWithAlternativeKeystoreWithWrongKeyManagerPassword() {
     try {
-      String keystorePath = Resources.getResource("test-keystore-key-man-pwd").toString();
+      String keystorePath =
+          getResource(HttpsAcceptanceTest.class, "test-keystore-key-man-pwd").toString();
       startServerWithKeystore(keystorePath, "password", "wrongpassword");
       fail("Expected a SocketException or SSLHandshakeException to be thrown");
     } catch (Exception e) {
@@ -222,7 +227,7 @@ public class HttpsAcceptanceTest {
   }
 
   @Test
-  public void rejectsWithoutClientCertificate() {
+  void rejectsWithoutClientCertificate() {
     startServerEnforcingClientCert(KEY_STORE_PATH, TRUST_STORE_PATH, TRUST_STORE_PASSWORD);
     wireMockServer.stubFor(
         get(urlEqualTo("/https-test"))
@@ -243,7 +248,7 @@ public class HttpsAcceptanceTest {
   }
 
   @Test
-  public void acceptWithClientCertificate() throws Exception {
+  void acceptWithClientCertificate() throws Exception {
     String testTrustStorePath = TRUST_STORE_PATH;
     String testClientCertPath = TRUST_STORE_PATH;
 
@@ -258,7 +263,7 @@ public class HttpsAcceptanceTest {
   }
 
   @Test
-  public void supportsProxyingWhenTargetRequiresClientCert() throws Exception {
+  void supportsProxyingWhenTargetRequiresClientCert() throws Exception {
     startServerEnforcingClientCert(KEY_STORE_PATH, TRUST_STORE_PATH, TRUST_STORE_PASSWORD);
     wireMockServer.stubFor(
         get(urlEqualTo("/client-cert-proxy")).willReturn(aResponse().withStatus(200)));
@@ -281,7 +286,7 @@ public class HttpsAcceptanceTest {
   }
 
   @Test
-  public void proxyingFailsWhenTargetServiceRequiresClientCertificatesAndProxyDoesNotSend()
+  void proxyingFailsWhenTargetServiceRequiresClientCertificatesAndProxyDoesNotSend()
       throws Exception {
     startServerEnforcingClientCert(KEY_STORE_PATH, TRUST_STORE_PATH, TRUST_STORE_PASSWORD);
     wireMockServer.stubFor(
@@ -297,6 +302,29 @@ public class HttpsAcceptanceTest {
     HttpGet get = new HttpGet("http://localhost:" + proxy.port() + "/client-cert-proxy-fail");
     HttpResponse response = httpClient.execute(get);
     assertThat(response.getCode(), is(500));
+  }
+
+  @Test
+  void doesNotTreatPlainHttpsRequestAsBrowserProxyRequest() throws Exception {
+    proxy =
+        new WireMockServer(
+            wireMockConfig().dynamicPort().dynamicHttpsPort().enableBrowserProxying(true));
+    proxy.start();
+    proxy.stubFor(get("/no-proxying-thanks").willReturn(ok("proxyless")));
+
+    httpClient = HttpClientFactory.createClient();
+
+    String url = "https://localhost:" + proxy.httpsPort() + "/no-proxying-thanks";
+    HttpGet get = new HttpGet(url);
+    int status = httpClient.execute(get, HttpResponse::getCode);
+    assertThat(status, is(200));
+
+    ServeEvent serveEvent =
+        proxy.getAllServeEvents().stream()
+            .filter(event -> event.getRequest().getUrl().equals("/no-proxying-thanks"))
+            .findFirst()
+            .get();
+    assertThat(serveEvent.getRequest().isBrowserProxyRequest(), is(false));
   }
 
   private String url(String path) {

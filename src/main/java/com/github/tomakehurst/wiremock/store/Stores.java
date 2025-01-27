@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022 Thomas Akehurst
+ * Copyright (C) 2022-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,11 +18,15 @@ package com.github.tomakehurst.wiremock.store;
 import static com.github.tomakehurst.wiremock.core.WireMockApp.FILES_ROOT;
 import static com.github.tomakehurst.wiremock.core.WireMockApp.MAPPINGS_ROOT;
 
-/**
- * Note: BETA This interface and everything else under the stores package is in beta so breaking
- * changes may occur between minor releases.
- */
+import org.wiremock.annotations.Beta;
+
+@Beta(justification = "Externalized State API: https://github.com/wiremock/wiremock/issues/2144")
 public interface Stores extends StoresLifecycle {
+
+  enum PersistenceType {
+    PERSISTENT,
+    EPHEMERAL
+  }
 
   StubMappingStore getStubStore();
 
@@ -43,4 +47,14 @@ public interface Stores extends StoresLifecycle {
   }
 
   BlobStore getBlobStore(String name);
+
+  default ObjectStore getObjectStore(String name) {
+    return getObjectStore(name, PersistenceType.EPHEMERAL);
+  }
+
+  default ObjectStore getObjectStore(String name, PersistenceType persistenceTypeHint) {
+    return getObjectStore(name, persistenceTypeHint, 10_000);
+  }
+
+  ObjectStore getObjectStore(String name, PersistenceType persistenceTypeHint, int maxSize);
 }

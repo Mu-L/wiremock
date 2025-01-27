@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016-2023 Thomas Akehurst
+ * Copyright (C) 2016-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,10 +15,6 @@
  */
 package com.github.tomakehurst.wiremock.matching;
 
-import static com.google.common.collect.Lists.newArrayList;
-import static com.google.common.collect.Lists.newLinkedList;
-import static com.google.common.collect.Maps.newLinkedHashMap;
-
 import com.github.tomakehurst.wiremock.client.BasicCredentials;
 import com.github.tomakehurst.wiremock.client.WireMock;
 import com.github.tomakehurst.wiremock.common.Errors;
@@ -26,6 +22,9 @@ import com.github.tomakehurst.wiremock.common.InvalidInputException;
 import com.github.tomakehurst.wiremock.extension.Parameters;
 import com.github.tomakehurst.wiremock.http.Request;
 import com.github.tomakehurst.wiremock.http.RequestMethod;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 
@@ -36,14 +35,15 @@ public class RequestPatternBuilder {
   private Integer port;
   private UrlPattern url = UrlPattern.ANY;
   private RequestMethod method = RequestMethod.ANY;
-  private Map<String, MultiValuePattern> headers = newLinkedHashMap();
-  private Map<String, MultiValuePattern> queryParams = newLinkedHashMap();
+  private Map<String, MultiValuePattern> headers = new LinkedHashMap<>();
+  private Map<String, MultiValuePattern> queryParams = new LinkedHashMap<>();
 
-  private Map<String, StringValuePattern> pathParams = newLinkedHashMap();
-  private List<ContentPattern<?>> bodyPatterns = newArrayList();
-  private Map<String, StringValuePattern> cookies = newLinkedHashMap();
+  private Map<String, MultiValuePattern> formParams = new LinkedHashMap<>();
+  private Map<String, StringValuePattern> pathParams = new LinkedHashMap<>();
+  private List<ContentPattern<?>> bodyPatterns = new ArrayList<>();
+  private Map<String, StringValuePattern> cookies = new LinkedHashMap<>();
   private BasicCredentials basicCredentials;
-  private List<MultipartValuePattern> multiparts = newLinkedList();
+  private List<MultipartValuePattern> multiparts = new LinkedList<>();
 
   private ValueMatcher<Request> customMatcher;
 
@@ -108,6 +108,9 @@ public class RequestPatternBuilder {
     if (requestPattern.getQueryParameters() != null) {
       builder.queryParams = requestPattern.getQueryParameters();
     }
+    if (requestPattern.getFormParameters() != null) {
+      builder.formParams = requestPattern.getFormParameters();
+    }
     if (requestPattern.getCookies() != null) {
       builder.cookies = requestPattern.getCookies();
     }
@@ -149,8 +152,18 @@ public class RequestPatternBuilder {
     return this;
   }
 
+  public RequestPatternBuilder withUrl(UrlPattern urlPattern) {
+    this.url = urlPattern;
+    return this;
+  }
+
   public RequestPatternBuilder withHeader(String key, StringValuePattern valuePattern) {
     headers.put(key, MultiValuePattern.of(valuePattern));
+    return this;
+  }
+
+  public RequestPatternBuilder withHeader(String key, MultiValuePattern multiValuePattern) {
+    headers.put(key, multiValuePattern);
     return this;
   }
 
@@ -166,6 +179,31 @@ public class RequestPatternBuilder {
 
   public RequestPatternBuilder withQueryParam(String key, StringValuePattern valuePattern) {
     queryParams.put(key, MultiValuePattern.of(valuePattern));
+    return this;
+  }
+
+  public RequestPatternBuilder withQueryParam(String key, MultiValuePattern multiValuePattern) {
+    queryParams.put(key, multiValuePattern);
+    return this;
+  }
+
+  public RequestPatternBuilder withFormParam(String key, StringValuePattern valuePattern) {
+    formParams.put(key, MultiValuePattern.of(valuePattern));
+    return this;
+  }
+
+  public RequestPatternBuilder withFormParam(String key, MultiValuePattern multiValuePattern) {
+    formParams.put(key, multiValuePattern);
+    return this;
+  }
+
+  public RequestPatternBuilder withoutFormParam(String key) {
+    formParams.put(key, MultiValuePattern.absent());
+    return this;
+  }
+
+  public RequestPatternBuilder withoutQueryParam(String key) {
+    queryParams.put(key, MultiValuePattern.absent());
     return this;
   }
 
@@ -213,8 +251,11 @@ public class RequestPatternBuilder {
   }
 
   public RequestPatternBuilder andMatching(String customRequestMatcherName, Parameters parameters) {
-    this.customMatcherDefinition =
-        new CustomMatcherDefinition(customRequestMatcherName, parameters);
+    return andMatching(new CustomMatcherDefinition(customRequestMatcherName, parameters));
+  }
+
+  public RequestPatternBuilder andMatching(CustomMatcherDefinition matcherDefinition) {
+    this.customMatcherDefinition = matcherDefinition;
     return this;
   }
 
@@ -234,6 +275,7 @@ public class RequestPatternBuilder {
         headers.isEmpty() ? null : headers,
         pathParams.isEmpty() ? null : pathParams,
         queryParams.isEmpty() ? null : queryParams,
+        formParams.isEmpty() ? null : formParams,
         cookies.isEmpty() ? null : cookies,
         basicCredentials,
         bodyPatterns.isEmpty() ? null : bodyPatterns,

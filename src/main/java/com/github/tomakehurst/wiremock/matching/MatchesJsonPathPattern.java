@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016-2022 Thomas Akehurst
+ * Copyright (C) 2016-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,22 +16,33 @@
 package com.github.tomakehurst.wiremock.matching;
 
 import static com.github.tomakehurst.wiremock.common.LocalNotifier.notifier;
+import static com.github.tomakehurst.wiremock.common.RequestCache.Key.keyFor;
 import static java.util.stream.Collectors.toList;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.github.tomakehurst.wiremock.common.Json;
 import com.github.tomakehurst.wiremock.common.ListOrSingle;
+import com.github.tomakehurst.wiremock.common.RequestCache;
+import com.github.tomakehurst.wiremock.stubbing.SubEvent;
+import com.jayway.jsonpath.DocumentContext;
 import com.jayway.jsonpath.JsonPath;
 import com.jayway.jsonpath.PathNotFoundException;
-import java.util.*;
+import java.util.Collection;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
 
 @JsonSerialize(using = JsonPathPatternJsonSerializer.class)
 public class MatchesJsonPathPattern extends PathPattern {
 
+  private final JsonPath jsonPath;
+
   public MatchesJsonPathPattern(
       @JsonProperty("matchesJsonPath") String expectedJsonPath, StringValuePattern valuePattern) {
     super(expectedJsonPath, valuePattern);
+    jsonPath = JsonPath.compile(expectedJsonPath);
   }
 
   public MatchesJsonPathPattern(String value) {
@@ -45,21 +56,21 @@ public class MatchesJsonPathPattern extends PathPattern {
   protected MatchResult isSimpleMatch(String value) {
     // For performance reason, don't try to parse XML value
     if (value != null && value.trim().startsWith("<")) {
-      notifier()
-          .info(
-              String.format(
-                  "Warning: JSON path expression '%s' failed to match document '%s' because it's not JSON document",
-                  expectedValue, value));
-      return MatchResult.noMatch();
+      final String message =
+          String.format(
+              "Warning: JSON path expression failed to match document '%s' because it's not JSON but probably XML",
+              value);
+      notifier().info(message);
+      return MatchResult.noMatch(SubEvent.warning(message));
     }
     try {
-      Object obj = JsonPath.read(value, expectedValue);
+      Object obj = evaluateJsonPath(value);
 
       boolean result;
       if (obj instanceof Collection) {
-        result = !((Collection) obj).isEmpty();
+        result = !((Collection<?>) obj).isEmpty();
       } else if (obj instanceof Map) {
-        result = !((Map) obj).isEmpty();
+        result = !((Map<?, ?>) obj).isEmpty();
       } else {
         result = obj != null;
       }
@@ -77,11 +88,10 @@ public class MatchesJsonPathPattern extends PathPattern {
 
       String message =
           String.format(
-              "Warning: JSON path expression '%s' failed to match document '%s' because %s",
-              expectedValue, value, error);
-      notifier().info(message);
+              "Warning: JSON path expression failed to match document '%s' because %s",
+              value, error);
 
-      return MatchResult.noMatch();
+      return MatchResult.noMatch(SubEvent.warning(message));
     }
   }
 
@@ -95,13 +105,34 @@ public class MatchesJsonPathPattern extends PathPattern {
         expressionResult = ListOrSingle.of((String) null);
       }
 
-      return expressionResult.stream()
-          .map(valuePattern::match)
-          .min(Comparator.comparingDouble(MatchResult::getDistance))
-          .orElse(MatchResult.noMatch());
+      final List<MatchResult> matchResults =
+          expressionResult.stream().map(valuePattern::match).collect(toList());
+      final List<SubEvent> subEvents =
+          matchResults.stream()
+              .map(MatchResult::getSubEvents)
+              .flatMap(Collection::stream)
+              .collect(toList());
+
+      return matchResults.stream()
+          .filter(MatchResult::isExactMatch)
+          .findFirst()
+          .orElse(
+              new MatchResult(subEvents) {
+                @Override
+                public boolean isExactMatch() {
+                  return false;
+                }
+
+                @Override
+                public double getDistance() {
+                  return matchResults.stream()
+                      .min(Comparator.comparingDouble(MatchResult::getDistance))
+                      .map(MatchResult::getDistance)
+                      .orElse(1.0);
+                }
+              });
     } catch (SubExpressionException e) {
-      notifier().info(e.getMessage());
-      return MatchResult.noMatch();
+      return MatchResult.noMatch(SubEvent.warning(e.getMessage()));
     }
   }
 
@@ -111,16 +142,16 @@ public class MatchesJsonPathPattern extends PathPattern {
     if (value != null && value.trim().startsWith("<")) {
       final String message =
           String.format(
-              "Warning: JSON path expression '%s' failed to match document '%s' because it's not JSON document",
+              "Warning: JSON path expression '%s' failed to match document '%s' because it's not JSON but probably XML",
               expectedValue, value);
-      notifier().info(message);
+
       throw new SubExpressionException(message);
     }
 
     Object obj = null;
     try {
-      obj = JsonPath.read(value, expectedValue);
-    } catch (PathNotFoundException pnfe) {
+      obj = evaluateJsonPath(value);
+    } catch (PathNotFoundException ignored) {
     } catch (Exception e) {
       String error;
       if (e.getMessage().equalsIgnoreCase("invalid container object")) {
@@ -138,7 +169,9 @@ public class MatchesJsonPathPattern extends PathPattern {
     }
 
     ListOrSingle<String> expressionResult;
-    if (obj instanceof Map || EqualToJsonPattern.class.isAssignableFrom(valuePattern.getClass())) {
+    if (obj instanceof Map
+        || (obj instanceof List
+            && EqualToJsonPattern.class.isAssignableFrom(valuePattern.getClass()))) {
       expressionResult = ListOrSingle.of(Json.write(obj));
     } else if (obj instanceof List) {
       final List<String> stringValues =
@@ -151,5 +184,21 @@ public class MatchesJsonPathPattern extends PathPattern {
     }
 
     return expressionResult;
+  }
+
+  private Object evaluateJsonPath(String value) {
+    if (value == null) {
+      return null;
+    }
+
+    final RequestCache requestCache = RequestCache.getCurrent();
+
+    final DocumentContext documentContext =
+        requestCache.get(
+            keyFor(JsonNode.class, "parsedJson", value.hashCode()), () -> JsonPath.parse(value));
+
+    return requestCache.get(
+        keyFor(JsonNode.class, "jsonPathResult", expectedValue, value.hashCode()),
+        () -> documentContext.read(jsonPath));
   }
 }

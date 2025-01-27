@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2023 Thomas Akehurst
+ * Copyright (C) 2011-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,16 +15,17 @@
  */
 package com.github.tomakehurst.wiremock.client;
 
+import static com.github.tomakehurst.wiremock.common.ContentTypes.CONTENT_TYPE;
+import static com.github.tomakehurst.wiremock.common.ContentTypes.LOCATION;
 import static com.github.tomakehurst.wiremock.matching.RequestPattern.thatMatch;
 import static com.github.tomakehurst.wiremock.matching.RequestPatternBuilder.allRequests;
-import static com.google.common.collect.FluentIterable.from;
-import static com.google.common.net.HttpHeaders.CONTENT_TYPE;
-import static com.google.common.net.HttpHeaders.LOCATION;
 
 import com.github.tomakehurst.wiremock.admin.model.ListStubMappingsResult;
 import com.github.tomakehurst.wiremock.admin.model.ServeEventQuery;
 import com.github.tomakehurst.wiremock.admin.model.SingleStubMappingResult;
-import com.github.tomakehurst.wiremock.common.*;
+import com.github.tomakehurst.wiremock.common.FileSource;
+import com.github.tomakehurst.wiremock.common.Json;
+import com.github.tomakehurst.wiremock.common.SingleRootFileSource;
 import com.github.tomakehurst.wiremock.core.Admin;
 import com.github.tomakehurst.wiremock.extension.Parameters;
 import com.github.tomakehurst.wiremock.global.GlobalSettings;
@@ -32,6 +33,7 @@ import com.github.tomakehurst.wiremock.http.DelayDistribution;
 import com.github.tomakehurst.wiremock.http.Request;
 import com.github.tomakehurst.wiremock.http.RequestMethod;
 import com.github.tomakehurst.wiremock.matching.*;
+import com.github.tomakehurst.wiremock.recording.RecordSpec;
 import com.github.tomakehurst.wiremock.recording.RecordSpecBuilder;
 import com.github.tomakehurst.wiremock.recording.RecordingStatusResult;
 import com.github.tomakehurst.wiremock.recording.SnapshotRecordResult;
@@ -39,9 +41,18 @@ import com.github.tomakehurst.wiremock.security.ClientAuthenticator;
 import com.github.tomakehurst.wiremock.standalone.RemoteMappingsLoader;
 import com.github.tomakehurst.wiremock.store.InMemorySettingsStore;
 import com.github.tomakehurst.wiremock.store.SettingsStore;
-import com.github.tomakehurst.wiremock.stubbing.*;
-import com.github.tomakehurst.wiremock.verification.*;
+import com.github.tomakehurst.wiremock.stubbing.Scenario;
+import com.github.tomakehurst.wiremock.stubbing.ServeEvent;
+import com.github.tomakehurst.wiremock.stubbing.StubImport;
+import com.github.tomakehurst.wiremock.stubbing.StubImportBuilder;
+import com.github.tomakehurst.wiremock.stubbing.StubMapping;
+import com.github.tomakehurst.wiremock.verification.FindNearMissesResult;
+import com.github.tomakehurst.wiremock.verification.FindRequestsResult;
+import com.github.tomakehurst.wiremock.verification.LoggedRequest;
+import com.github.tomakehurst.wiremock.verification.NearMiss;
+import com.github.tomakehurst.wiremock.verification.VerificationResult;
 import com.github.tomakehurst.wiremock.verification.diff.Diff;
+import com.networknt.schema.SpecVersion;
 import java.io.File;
 import java.time.LocalDateTime;
 import java.time.ZonedDateTime;
@@ -49,6 +60,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 public class WireMock {
 
@@ -131,6 +144,10 @@ public class WireMock {
 
   public static void removeStub(StubMapping stubMapping) {
     defaultInstance.get().removeStubMapping(stubMapping);
+  }
+
+  public static void removeStub(UUID id) {
+    defaultInstance.get().removeStubMapping(id);
   }
 
   public static ListStubMappingsResult listAllStubMappings() {
@@ -223,12 +240,26 @@ public class WireMock {
     return new MatchesJsonPathPattern(value, valuePattern);
   }
 
+  public static StringValuePattern matchingJsonSchema(String schema) {
+    return new MatchesJsonSchemaPattern(schema);
+  }
+
+  public static StringValuePattern matchingJsonSchema(
+      String schema, JsonSchemaVersion jsonSchemaVersion) {
+    return new MatchesJsonSchemaPattern(schema, jsonSchemaVersion);
+  }
+
   public static EqualToXmlPattern equalToXml(String value) {
     return new EqualToXmlPattern(value);
   }
 
   public static EqualToXmlPattern equalToXml(String value, boolean enablePlaceholders) {
-    return new EqualToXmlPattern(value, enablePlaceholders, null, null, null);
+    return new EqualToXmlPattern(value, enablePlaceholders, null, null, null, false);
+  }
+
+  public static EqualToXmlPattern equalToXml(
+      String value, boolean enablePlaceholders, boolean ignoreOrderOfSameNode) {
+    return new EqualToXmlPattern(value, enablePlaceholders, ignoreOrderOfSameNode);
   }
 
   public static EqualToXmlPattern equalToXml(
@@ -241,11 +272,27 @@ public class WireMock {
         enablePlaceholders,
         placeholderOpeningDelimiterRegex,
         placeholderClosingDelimiterRegex,
-        null);
+        null,
+        false);
+  }
+
+  public static EqualToXmlPattern equalToXml(
+      String value,
+      boolean enablePlaceholders,
+      String placeholderOpeningDelimiterRegex,
+      String placeholderClosingDelimiterRegex,
+      boolean ignoreOrderOfSameNode) {
+    return new EqualToXmlPattern(
+        value,
+        enablePlaceholders,
+        placeholderOpeningDelimiterRegex,
+        placeholderClosingDelimiterRegex,
+        null,
+        ignoreOrderOfSameNode);
   }
 
   public static MatchesXPathPattern matchingXPath(String value) {
-    return new MatchesXPathPattern(value, Collections.<String, String>emptyMap());
+    return new MatchesXPathPattern(value, Collections.emptyMap());
   }
 
   public static StringValuePattern matchingXPath(String value, Map<String, String> namespaces) {
@@ -268,6 +315,10 @@ public class WireMock {
 
   public static StringValuePattern notContaining(String value) {
     return new NegativeContainsPattern(value);
+  }
+
+  public static StringValuePattern not(StringValuePattern unexpectedPattern) {
+    return new NotPattern(unexpectedPattern);
   }
 
   public static StringValuePattern matching(String regex) {
@@ -432,6 +483,10 @@ public class WireMock {
     admin.removeStubMapping(stubMapping);
   }
 
+  public void removeStubMapping(UUID id) {
+    admin.removeStubMapping(id);
+  }
+
   public ListStubMappingsResult allStubMappings() {
     return admin.listAllStubMappings();
   }
@@ -458,6 +513,33 @@ public class WireMock {
 
   public static UrlPathPattern urlPathTemplate(String pathTemplate) {
     return new UrlPathTemplatePattern(pathTemplate);
+  }
+
+  public static MultiValuePattern havingExactly(final StringValuePattern... valuePatterns) {
+    if (valuePatterns.length == 0) {
+      return noValues();
+    }
+    return new ExactMatchMultiValuePattern(Stream.of(valuePatterns).collect(Collectors.toList()));
+  }
+
+  public static MultiValuePattern havingExactly(String... values) {
+    return havingExactly(Stream.of(values).map(EqualToPattern::new).toArray(EqualToPattern[]::new));
+  }
+
+  public static MultiValuePattern including(final StringValuePattern... valuePatterns) {
+    if (valuePatterns.length == 0) {
+      return noValues();
+    }
+    return new IncludesMatchMultiValuePattern(
+        Stream.of(valuePatterns).collect(Collectors.toList()));
+  }
+
+  public static MultiValuePattern including(String... values) {
+    return including(Stream.of(values).map(EqualToPattern::new).toArray(EqualToPattern[]::new));
+  }
+
+  public static MultiValuePattern noValues() {
+    return MultiValuePattern.of(absent());
   }
 
   public static UrlPattern anyUrl() {
@@ -518,6 +600,18 @@ public class WireMock {
 
   public static MappingBuilder any(UrlPattern urlPattern) {
     return new BasicMappingBuilder(RequestMethod.ANY, urlPattern);
+  }
+
+  /**
+   * A mapping builder that can be used for both GET and HEAD http method. Returns a response body
+   * in case for GET and not in case of HEAD method. In case of tie the request is treated as a GET
+   * request
+   *
+   * @param urlPattern for the specified method
+   * @return a mapping builder for {@link RequestMethod#GET_OR_HEAD} http method
+   */
+  public static MappingBuilder getOrHead(UrlPattern urlPattern) {
+    return new BasicMappingBuilder(RequestMethod.GET_OR_HEAD, urlPattern);
   }
 
   public static MappingBuilder request(String method, UrlPattern urlPattern) {
@@ -596,6 +690,10 @@ public class WireMock {
     return delete(urlEqualTo(url));
   }
 
+  public static MappingBuilder patch(String url) {
+    return patch(urlEqualTo(url));
+  }
+
   public static ResponseDefinitionBuilder created() {
     return aResponse().withStatus(201);
   }
@@ -664,7 +762,7 @@ public class WireMock {
     if (requestPattern.hasInlineCustomMatcher()) {
       List<LoggedRequest> requests =
           admin.findRequestsMatching(RequestPattern.everything()).getRequests();
-      actualCount = from(requests).filter(thatMatch(requestPattern)).size();
+      actualCount = (int) requests.stream().filter(thatMatch(requestPattern)).count();
     } else {
       VerificationResult result = admin.countRequestsMatching(requestPattern);
       result.assertRequestJournalEnabled();
@@ -681,7 +779,7 @@ public class WireMock {
   private VerificationException verificationExceptionForNearMisses(
       RequestPatternBuilder requestPatternBuilder, RequestPattern requestPattern) {
     List<NearMiss> nearMisses = findAllNearMissesFor(requestPatternBuilder);
-    if (nearMisses.size() > 0) {
+    if (!nearMisses.isEmpty()) {
       Diff diff = new Diff(requestPattern, nearMisses.get(0).getRequest());
       return VerificationException.forUnmatchedRequestPattern(diff);
     }
@@ -786,6 +884,10 @@ public class WireMock {
 
   public static RequestPatternBuilder anyRequestedFor(UrlPattern urlPattern) {
     return new RequestPatternBuilder(RequestMethod.ANY, urlPattern);
+  }
+
+  public static RequestPatternBuilder requestedFor(String method, UrlPattern urlPattern) {
+    return new RequestPatternBuilder(RequestMethod.fromString(method), urlPattern);
   }
 
   public static RequestPatternBuilder requestMadeFor(
@@ -906,12 +1008,20 @@ public class WireMock {
     defaultInstance.get().startStubRecording(targetBaseUrl);
   }
 
+  public static void startRecording() {
+    defaultInstance.get().startStubRecording();
+  }
+
   public static void startRecording(RecordSpecBuilder spec) {
     defaultInstance.get().startStubRecording(spec);
   }
 
   public void startStubRecording(String targetBaseUrl) {
     admin.startRecording(targetBaseUrl);
+  }
+
+  public void startStubRecording() {
+    admin.startRecording(RecordSpec.DEFAULTS);
   }
 
   public void startStubRecording(RecordSpecBuilder spec) {
@@ -976,5 +1086,32 @@ public class WireMock {
 
   public static GlobalSettings getSettings() {
     return defaultInstance.get().getGlobalSettings();
+  }
+
+  public enum JsonSchemaVersion {
+    V4,
+    V6,
+    V7,
+    V201909,
+    V202012;
+
+    public static final JsonSchemaVersion DEFAULT = V202012;
+
+    public SpecVersion.VersionFlag toVersionFlag() {
+      switch (this) {
+        case V4:
+          return SpecVersion.VersionFlag.V4;
+        case V6:
+          return SpecVersion.VersionFlag.V6;
+        case V7:
+          return SpecVersion.VersionFlag.V7;
+        case V201909:
+          return SpecVersion.VersionFlag.V201909;
+        case V202012:
+          return SpecVersion.VersionFlag.V202012;
+        default:
+          throw new IllegalArgumentException("Unknown schema version: " + this);
+      }
+    }
   }
 }

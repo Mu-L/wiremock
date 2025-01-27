@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016-2023 Thomas Akehurst
+ * Copyright (C) 2016-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,6 +26,8 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 public class PathTemplateTest {
 
@@ -214,7 +216,7 @@ public class PathTemplateTest {
   @Test
   void returnsPathTemplateWithVariablesStrippedOut() {
     PathTemplate pathTemplate = new PathTemplate("/one/{first}/two/{second}/three");
-    assertThat(pathTemplate.withoutVariables(), is("/one//two//three"));
+    assertThat(pathTemplate.withoutVariables(), is("/one/_/two/_/three"));
   }
 
   @Test
@@ -246,5 +248,28 @@ public class PathTemplateTest {
     String renderedUrl = pathTemplate.render(pathParams);
 
     assertThat(renderedUrl, is("/one/.3,4,5/two/;second=1;second=2"));
+  }
+
+  @Test
+  void ignoresQueryParameter() {
+    PathTemplate pathTemplate = new PathTemplate("/things/{thingId}/stuff");
+    assertTrue(pathTemplate.matches("/things/123/stuff?query=param"));
+  }
+
+  @ParameterizedTest()
+  @CsvSource({
+    "/things,0",
+    "/things/{id},1",
+    "/things/{id}/otherthings/{subId},2",
+    "/things/stuff,0",
+    "/things/**,1",
+    "/things/**/,1",
+    "/things/{id}/**,2",
+    "/things/**/{id},2",
+    "/one/{.first}/two/{;second*},2",
+  })
+  void exposesNumberOfParameters(String template, int expectedNumberOfParameters) {
+    PathTemplate pathTemplate = new PathTemplate(template);
+    assertThat(pathTemplate.numberOfParameters(), is(expectedNumberOfParameters));
   }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016-2022 Thomas Akehurst
+ * Copyright (C) 2016-2025 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,26 +19,17 @@ import static com.github.tomakehurst.wiremock.client.WireMock.equalToXml;
 import static org.hamcrest.CoreMatchers.equalTo;
 import static org.hamcrest.CoreMatchers.not;
 import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.closeTo;
-import static org.hamcrest.Matchers.is;
-import static org.hamcrest.Matchers.nullValue;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.hamcrest.Matchers.*;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.Mockito.verify;
 import static org.xmlunit.diff.ComparisonType.ATTR_VALUE;
 import static org.xmlunit.diff.ComparisonType.NAMESPACE_URI;
 import static org.xmlunit.diff.ComparisonType.SCHEMA_LOCATION;
 
-import com.github.tomakehurst.wiremock.common.ConsoleNotifier;
-import com.github.tomakehurst.wiremock.common.Json;
-import com.github.tomakehurst.wiremock.common.LocalNotifier;
-import com.github.tomakehurst.wiremock.common.Notifier;
+import com.github.tomakehurst.wiremock.common.*;
 import com.github.tomakehurst.wiremock.junit5.WireMockExtension;
 import com.github.tomakehurst.wiremock.testsupport.WireMatchers;
-import com.google.common.collect.ImmutableSet;
 import java.util.Locale;
 import java.util.Set;
 import org.hamcrest.Matchers;
@@ -47,7 +38,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.mockito.Mockito;
-import org.xmlunit.diff.ComparisonType;
+import org.skyscreamer.jsonassert.JSONCompareMode;
 
 public class EqualToXmlPatternTest {
 
@@ -292,7 +283,7 @@ public class EqualToXmlPatternTest {
   }
 
   @Test
-  public void returnsNoMatchWhenTagNamesDifferAndContentIsSame() throws Exception {
+  public void returnsNoMatchWhenTagNamesDifferAndContentIsSame() {
     final EqualToXmlPattern pattern = new EqualToXmlPattern("<one>Hello</one>");
     final MatchResult matchResult = pattern.match("<two>Hello</two>");
 
@@ -309,7 +300,7 @@ public class EqualToXmlPatternTest {
   }
 
   @Test
-  public void doesNotFetchDtdBecauseItCouldResultInAFailedMatch() throws Exception {
+  public void doesNotFetchDtdBecauseItCouldResultInAFailedMatch() {
     String xmlWithDtdThatCannotBeFetched =
         "<!DOCTYPE my_request SYSTEM \"https://thishostname.doesnotexist.com/one.dtd\"><do_request/>";
     EqualToXmlPattern pattern = new EqualToXmlPattern(xmlWithDtdThatCannotBeFetched);
@@ -344,7 +335,7 @@ public class EqualToXmlPatternTest {
   public void returnsMatchWhenTextNodeIsIgnored() {
     String expectedXml = "<a>#{xmlunit.ignore}</a>";
     String actualXml = "<a>123</a>";
-    EqualToXmlPattern pattern = new EqualToXmlPattern(expectedXml, true, "#\\{", "}", null);
+    EqualToXmlPattern pattern = new EqualToXmlPattern(expectedXml, true, "#\\{", "}", null, false);
     MatchResult matchResult = pattern.match(actualXml);
 
     assertTrue(matchResult.isExactMatch());
@@ -355,7 +346,7 @@ public class EqualToXmlPatternTest {
   public void returnsMatchWhenTextNodeIsIgnored_DefaultDelimiters() {
     String expectedXml = "<a>${xmlunit.ignore}</a>";
     String actualXml = "<a>123</a>";
-    EqualToXmlPattern pattern = new EqualToXmlPattern(expectedXml, true, null, null, null);
+    EqualToXmlPattern pattern = new EqualToXmlPattern(expectedXml, true, null, null, null, false);
     MatchResult matchResult = pattern.match(actualXml);
 
     assertTrue(matchResult.isExactMatch());
@@ -378,6 +369,7 @@ public class EqualToXmlPatternTest {
   @Test
   public void deserializesEqualToXmlWithAllParameters() {
     Boolean enablePlaceholders = Boolean.TRUE;
+    Boolean ignoreOrderOfSameNode = Boolean.TRUE;
     String placeholderOpeningDelimiterRegex = "theOpeningDelimiterRegex";
     String placeholderClosingDelimiterRegex = "theClosingDelimiterRegex";
     String patternJson =
@@ -385,6 +377,9 @@ public class EqualToXmlPatternTest {
             + "\"equalToXml\" : \"<a/>\", "
             + "\"enablePlaceholders\" : "
             + enablePlaceholders
+            + ", "
+            + "\"ignoreOrderOfSameNode\" : "
+            + ignoreOrderOfSameNode
             + ", "
             + "\"placeholderOpeningDelimiterRegex\" : \""
             + placeholderOpeningDelimiterRegex
@@ -398,20 +393,21 @@ public class EqualToXmlPatternTest {
     assertTrue(stringValuePattern instanceof EqualToXmlPattern);
     EqualToXmlPattern equalToXmlPattern = (EqualToXmlPattern) stringValuePattern;
     assertEquals(enablePlaceholders, equalToXmlPattern.isEnablePlaceholders());
+    assertEquals(ignoreOrderOfSameNode, equalToXmlPattern.isIgnoreOrderOfSameNode());
     assertEquals(
         placeholderOpeningDelimiterRegex, equalToXmlPattern.getPlaceholderOpeningDelimiterRegex());
     assertEquals(
         placeholderClosingDelimiterRegex, equalToXmlPattern.getPlaceholderClosingDelimiterRegex());
     assertThat(
         equalToXmlPattern.getExemptedComparisons(),
-        Matchers.<Set<ComparisonType>>is(
-            ImmutableSet.of(SCHEMA_LOCATION, NAMESPACE_URI, ATTR_VALUE)));
+        Matchers.is(Set.of(SCHEMA_LOCATION, NAMESPACE_URI, ATTR_VALUE)));
   }
 
   @Test
   public void serializesEqualToXmlWithAllParameters() {
     String xml = "<stuff />";
     Boolean enablePlaceholders = Boolean.TRUE;
+    Boolean ignoreOrderOfSameNode = Boolean.TRUE;
     String placeholderOpeningDelimiterRegex = "[";
     String placeholderClosingDelimiterRegex = "]";
 
@@ -421,7 +417,8 @@ public class EqualToXmlPatternTest {
             enablePlaceholders,
             placeholderOpeningDelimiterRegex,
             placeholderClosingDelimiterRegex,
-            ImmutableSet.of(SCHEMA_LOCATION, NAMESPACE_URI, ATTR_VALUE));
+            Set.of(SCHEMA_LOCATION, NAMESPACE_URI, ATTR_VALUE),
+            ignoreOrderOfSameNode);
 
     String json = Json.write(pattern);
 
@@ -431,10 +428,12 @@ public class EqualToXmlPatternTest {
             "{\n"
                 + "  \"equalToXml\": \"<stuff />\",\n"
                 + "  \"enablePlaceholders\": true,\n"
+                + "  \"ignoreOrderOfSameNode\": true,\n"
                 + "  \"placeholderOpeningDelimiterRegex\": \"[\",\n"
                 + "  \"placeholderClosingDelimiterRegex\": \"]\",\n"
-                + "  \"exemptedComparisons\": [\"SCHEMA_LOCATION\", \"NAMESPACE_URI\", \"ATTR_VALUE\"]\n"
-                + "}"));
+                + "  \"exemptedComparisons\": [\"SCHEMA_LOCATION\", \"ATTR_VALUE\", \"NAMESPACE_URI\"]\n"
+                + "}",
+            JSONCompareMode.NON_EXTENSIBLE));
   }
 
   @Test
@@ -451,7 +450,8 @@ public class EqualToXmlPatternTest {
             + "    <st:thing>Match this</st:thing>\n"
             + "</stuff>";
 
-    MatchResult matchResult = equalToXml(expected).match(actual);
+    MatchResult matchResult =
+        equalToXml(expected).exemptingComparisons(NAMESPACE_URI).match(actual);
 
     assertTrue(matchResult.isExactMatch());
   }
@@ -477,5 +477,95 @@ public class EqualToXmlPatternTest {
     StringValuePattern pattern = equalToXml(expected).exemptingComparisons(NAMESPACE_URI);
 
     assertTrue(pattern.match(actual).isExactMatch());
+  }
+
+  @Test
+  public void testEquals() {
+    EqualToXmlPattern a =
+        new EqualToXmlPattern(
+            "<ns2:GetValue\n"
+                + "        xmlns=\"http://CIS/BIR/PUBL/2014/07/DataContract\"\n"
+                + "        xmlns:ns2=\"http://CIS/BIR/2014/07\"                         \n"
+                + "        xmlns:ns3=\"http://CIS/BIR/PUBL/2014/07\"                    \n"
+                + "        xmlns:ns4=\"http://schemas.microsoft.com/2003/10/Serializa  \n"
+                + "        tion/\"/>");
+    EqualToXmlPattern b =
+        new EqualToXmlPattern(
+            "<ns2:GetValue\n"
+                + "        xmlns=\"http://CIS/BIR/PUBL/2014/07/DataContract\"\n"
+                + "        xmlns:ns2=\"http://CIS/BIR/2014/07\"                         \n"
+                + "        xmlns:ns3=\"http://CIS/BIR/PUBL/2014/07\"                    \n"
+                + "        xmlns:ns4=\"http://schemas.microsoft.com/2003/10/Serializa  \n"
+                + "        tion/\"/>");
+    EqualToXmlPattern c =
+        new EqualToXmlPattern(
+            "<ns2:GetValue\n"
+                + "        xmlns=\"http://CIS/BIR/PUBL/2015/07/DataContract\"\n"
+                + "        xmlns:ns2=\"http://CIS/BIR/2015/07\"                         \n"
+                + "        xmlns:ns3=\"http://CIS/BIR/PUBL/2015/07\"                    \n"
+                + "        xmlns:ns4=\"http://schemas.microsoft.com/2004/10/Serializa  \n"
+                + "        tion/\"/>");
+
+    assertEquals(a, b);
+    assertEquals(a.hashCode(), b.hashCode());
+    assertEquals(b, a);
+    assertEquals(b.hashCode(), a.hashCode());
+    assertNotEquals(a, c);
+    assertNotEquals(a.hashCode(), c.hashCode());
+    assertNotEquals(b, c);
+    assertNotEquals(b.hashCode(), c.hashCode());
+  }
+
+  @Test
+  void subEventIsReturnedOnXmlParsingError() {
+    MatchResult match = new EqualToXmlPattern("<things />").match("<wrong");
+
+    assertThat(match.isExactMatch(), is(false));
+    assertThat(match.getSubEvents().size(), is(1));
+    String message =
+        match.getSubEvents().stream().findFirst().get().getData().get("message").toString();
+    assertThat(
+        message, startsWith("XML document structures must start and end within the same entity"));
+  }
+
+  @Test
+  void ignoreOrderOfSameNodeOnSameLevel() {
+    EqualToXmlPattern pattern =
+        new EqualToXmlPattern("<body><entry>1</entry><entry>2</entry></body>", false, true);
+    MatchResult result = pattern.match("<body><entry>2</entry><entry>1</entry></body>");
+    assertTrue(result.isExactMatch());
+  }
+
+  @Test
+  void dontIgnoreOrderOfSameNodeOnSameLevel() {
+    EqualToXmlPattern pattern =
+        new EqualToXmlPattern("<body><entry>1</entry><entry>2</entry></body>", false, false);
+    MatchResult result = pattern.match("<body><entry>2</entry><entry>1</entry></body>");
+    assertFalse(result.isExactMatch());
+  }
+
+  @Test
+  void doesNotMatchWhenSameNodeOnSameLevelHasDifferentValues() {
+    EqualToXmlPattern pattern =
+        new EqualToXmlPattern("<body><entry>1</entry><entry>3</entry></body>", false, true);
+    MatchResult result = pattern.match("<body><entry>2</entry><entry>1</entry></body>");
+    assertFalse(result.isExactMatch());
+  }
+
+  @Test
+  void matchesIfMultipleSameNodesOnSameLevelWithDifferentNodes() {
+    EqualToXmlPattern pattern =
+        new EqualToXmlPattern(
+            "<body><entry>1</entry><entry>2</entry><other>2</other></body>", false, true);
+    MatchResult result =
+        pattern.match("<body><entry>2</entry><entry>1</entry><other>2</other></body>");
+    assertTrue(result.isExactMatch());
+  }
+
+  @Test
+  void matchesIfTwoIdenticalChildNodesAreEmpty() {
+    EqualToXmlPattern pattern = new EqualToXmlPattern("<body><entry/><entry/></body>", false, true);
+    MatchResult result = pattern.match("<body><entry/><entry/></body>");
+    assertTrue(result.isExactMatch());
   }
 }

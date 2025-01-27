@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016-2022 Thomas Akehurst
+ * Copyright (C) 2016-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,18 +18,14 @@ package com.github.tomakehurst.wiremock.admin;
 import static com.github.tomakehurst.wiremock.admin.RequestSpec.requestSpec;
 import static com.github.tomakehurst.wiremock.common.Exceptions.throwUnchecked;
 import static com.github.tomakehurst.wiremock.http.RequestMethod.*;
-import static com.google.common.collect.Iterables.tryFind;
 
 import com.github.tomakehurst.wiremock.admin.tasks.*;
 import com.github.tomakehurst.wiremock.extension.AdminApiExtension;
 import com.github.tomakehurst.wiremock.http.RequestMethod;
 import com.github.tomakehurst.wiremock.store.Stores;
-import com.github.tomakehurst.wiremock.verification.notmatched.PlainTextStubNotMatchedRenderer;
-import com.google.common.base.Function;
-import com.google.common.base.Predicate;
 import com.google.common.collect.ImmutableBiMap;
 import java.util.Collections;
-import java.util.Map;
+import java.util.Map.Entry;
 
 public class AdminRoutes {
 
@@ -38,23 +34,19 @@ public class AdminRoutes {
   private final Stores stores;
 
   public static AdminRoutes forClient() {
-    return new AdminRoutes(
-        Collections.<AdminApiExtension>emptyList(), new PlainTextStubNotMatchedRenderer(), null);
+    return new AdminRoutes(Collections.emptyList(), null);
   }
 
-  public static AdminRoutes forServer(
-      Iterable<AdminApiExtension> apiExtensions, AdminTask notMatchedTask, Stores stores) {
-    return new AdminRoutes(apiExtensions, notMatchedTask, stores);
+  public static AdminRoutes forServer(Iterable<AdminApiExtension> apiExtensions, Stores stores) {
+    return new AdminRoutes(apiExtensions, stores);
   }
 
-  protected AdminRoutes(
-      Iterable<AdminApiExtension> apiExtensions, AdminTask notMatchedTask, Stores stores) {
+  protected AdminRoutes(Iterable<AdminApiExtension> apiExtensions, Stores stores) {
     this.apiExtensions = apiExtensions;
     this.stores = stores;
     RouteBuilder routeBuilder = new RouteBuilder();
     initDefaultRoutes(routeBuilder);
     initAdditionalRoutes(routeBuilder);
-    routeBuilder.add(ANY, "/not-matched", notMatchedTask);
     routes = routeBuilder.build();
   }
 
@@ -67,14 +59,15 @@ public class AdminRoutes {
     router.add(POST, "/mappings", new CreateStubMappingTask());
     router.add(DELETE, "/mappings", new ResetStubMappingsTask());
 
-    router.add(POST, "/mappings/new", new OldCreateStubMappingTask()); // Deprecated
-    router.add(POST, "/mappings/remove", new OldRemoveStubMappingTask()); // Deprecated
-    router.add(POST, "/mappings/edit", new OldEditStubMappingTask()); // Deprecated
+    // Deprecated but kept so that 2.x client will still be compatible
+    router.add(POST, "/mappings/edit", new OldEditStubMappingTask());
+
     router.add(POST, "/mappings/save", new SaveMappingsTask());
     router.add(POST, "/mappings/reset", new ResetToDefaultMappingsTask());
     router.add(GET, "/mappings/{id}", new GetStubMappingTask());
     router.add(PUT, "/mappings/{id}", new EditStubMappingTask());
-    router.add(DELETE, "/mappings/{id}", new RemoveStubMappingTask());
+    router.add(POST, "/mappings/remove", new RemoveMatchingStubMappingTask());
+    router.add(DELETE, "/mappings/{id}", new RemoveStubMappingByIdTask());
     router.add(POST, "/mappings/find-by-metadata", new FindStubMappingsByMetadataTask());
     router.add(POST, "/mappings/remove-by-metadata", new RemoveStubMappingsByMetadataTask());
     router.add(POST, "/mappings/import", new ImportStubMappingsTask());
@@ -82,6 +75,7 @@ public class AdminRoutes {
     router.add(GET, "/files", new GetAllStubFilesTask(stores));
     router.add(PUT, "/files/**", new EditStubFileTask(stores));
     router.add(DELETE, "/files/**", new DeleteStubFileTask(stores));
+    router.add(GET, "/files/**", new GetStubFileTask(stores));
 
     router.add(GET, "/scenarios", new GetAllScenariosTask());
     router.add(POST, "/scenarios/reset", new ResetScenariosTask());
@@ -89,7 +83,6 @@ public class AdminRoutes {
 
     router.add(GET, "/requests", new GetAllRequestsTask());
     router.add(DELETE, "/requests", new ResetRequestsTask());
-    router.add(POST, "/requests/reset", new OldResetRequestsTask()); // Deprecated
     router.add(POST, "/requests/count", new GetRequestCountTask());
     router.add(POST, "/requests/find", new FindRequestsTask());
     router.add(GET, "/requests/unmatched", new FindUnmatchedRequestsTask());
@@ -119,6 +112,10 @@ public class AdminRoutes {
     router.add(GET, "/docs", new GetDocIndexTask());
 
     router.add(GET, "/certs/wiremock-ca.crt", new GetCaCertTask());
+
+    router.add(GET, "/health", new HealthCheckTask());
+
+    router.add(GET, "/version", new GetVersionTask());
   }
 
   protected void initAdditionalRoutes(Router routeBuilder) {
@@ -128,48 +125,21 @@ public class AdminRoutes {
   }
 
   public AdminTask taskFor(final RequestMethod method, final String path) {
-    return tryFind(
-            routes.entrySet(),
-            new Predicate<Map.Entry<RequestSpec, AdminTask>>() {
-              @Override
-              public boolean apply(Map.Entry<RequestSpec, AdminTask> entry) {
-                return entry.getKey().matches(method, path);
-              }
-            })
-        .transform(
-            new Function<Map.Entry<RequestSpec, AdminTask>, AdminTask>() {
-              @Override
-              public AdminTask apply(Map.Entry<RequestSpec, AdminTask> input) {
-                return input.getValue();
-              }
-            })
-        .or(new NotFoundAdminTask());
+    return routes.entrySet().stream()
+        .filter(entry -> entry.getKey().matches(method, path))
+        .map(Entry::getValue)
+        .findFirst()
+        .orElseGet(NotFoundAdminTask::new);
   }
 
   public RequestSpec requestSpecForTask(final Class<? extends AdminTask> taskClass) {
-    RequestSpec requestSpec =
-        tryFind(
-                routes.entrySet(),
-                new Predicate<Map.Entry<RequestSpec, AdminTask>>() {
-                  @Override
-                  public boolean apply(Map.Entry<RequestSpec, AdminTask> input) {
-                    return input.getValue().getClass().equals(taskClass);
-                  }
-                })
-            .transform(
-                new Function<Map.Entry<RequestSpec, AdminTask>, RequestSpec>() {
-                  @Override
-                  public RequestSpec apply(Map.Entry<RequestSpec, AdminTask> input) {
-                    return input.getKey();
-                  }
-                })
-            .orNull();
-
-    if (requestSpec == null) {
-      throw new NotFoundException("No route could be found for " + taskClass.getSimpleName());
-    }
-
-    return requestSpec;
+    return routes.entrySet().stream()
+        .filter(input -> input.getValue().getClass().equals(taskClass))
+        .map(Entry::getKey)
+        .findFirst()
+        .orElseThrow(
+            () ->
+                new NotFoundException("No route could be found for " + taskClass.getSimpleName()));
   }
 
   protected static class RouteBuilder implements Router {
