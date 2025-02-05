@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2023 Thomas Akehurst
+ * Copyright (C) 2011-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,8 +17,10 @@ package com.github.tomakehurst.wiremock.client;
 
 import static com.github.tomakehurst.wiremock.common.Exceptions.throwUnchecked;
 import static com.github.tomakehurst.wiremock.common.HttpClientUtils.getEntityAsStringAndCloseStream;
+import static com.github.tomakehurst.wiremock.common.Strings.isNotBlank;
 import static com.github.tomakehurst.wiremock.security.NoClientAuthenticator.noClientAuthenticator;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
+import static org.apache.hc.core5.http.HttpHeaders.CONTENT_TYPE;
 import static org.apache.hc.core5.http.HttpHeaders.HOST;
 
 import com.github.tomakehurst.wiremock.admin.*;
@@ -47,10 +49,11 @@ import com.github.tomakehurst.wiremock.stubbing.StubMapping;
 import com.github.tomakehurst.wiremock.verification.*;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
-import org.apache.commons.lang3.StringUtils;
 import org.apache.hc.client5.http.classic.methods.HttpGet;
 import org.apache.hc.client5.http.classic.methods.HttpPost;
+import org.apache.hc.client5.http.classic.methods.HttpPut;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpResponse;
 import org.apache.hc.core5.http.ClassicHttpRequest;
@@ -154,18 +157,21 @@ public class HttpAdminClient implements Admin {
 
   @Override
   public void editStubMapping(StubMapping stubMapping) {
-    postJsonAssertOkAndReturnBody(urlFor(OldEditStubMappingTask.class), Json.write(stubMapping));
+    putJsonAssertOkAndReturnBody(
+        urlFor(EditStubMappingTask.class, PathParams.single("id", stubMapping.getId().toString())),
+        Json.write(stubMapping));
   }
 
   @Override
   public void removeStubMapping(StubMapping stubbMapping) {
-    postJsonAssertOkAndReturnBody(urlFor(OldRemoveStubMappingTask.class), Json.write(stubbMapping));
+    postJsonAssertOkAndReturnBody(
+        urlFor(RemoveMatchingStubMappingTask.class), Json.write(stubbMapping));
   }
 
   @Override
   public void removeStubMapping(UUID id) {
     executeRequest(
-        adminRoutes.requestSpecForTask(RemoveStubMappingTask.class),
+        adminRoutes.requestSpecForTask(RemoveStubMappingByIdTask.class),
         PathParams.single("id", id),
         Void.class);
   }
@@ -177,7 +183,6 @@ public class HttpAdminClient implements Admin {
   }
 
   @Override
-  @SuppressWarnings("unchecked")
   public SingleStubMappingResult getStubMapping(UUID id) {
     return executeRequest(
         adminRoutes.requestSpecForTask(GetStubMappingTask.class),
@@ -434,7 +439,7 @@ public class HttpAdminClient implements Admin {
   }
 
   private ProxySettings createProxySettings(String proxyHost, int proxyPort) {
-    if (StringUtils.isNotBlank(proxyHost)) {
+    if (isNotBlank(proxyHost)) {
       return new ProxySettings(proxyHost, proxyPort);
     }
     return ProxySettings.NO_PROXY;
@@ -442,11 +447,16 @@ public class HttpAdminClient implements Admin {
 
   private String postJsonAssertOkAndReturnBody(String url, String json) {
     HttpPost post = new HttpPost(url);
-    if (json != null) {
-      post.setEntity(jsonStringEntity(json));
-    }
-
+    post.addHeader(CONTENT_TYPE, "application/json");
+    post.setEntity(jsonStringEntity(Optional.ofNullable(json).orElse("")));
     return safelyExecuteRequest(url, post);
+  }
+
+  private String putJsonAssertOkAndReturnBody(String url, String json) {
+    HttpPut put = new HttpPut(url);
+    put.addHeader(CONTENT_TYPE, "application/json");
+    put.setEntity(jsonStringEntity(Optional.ofNullable(json).orElse("")));
+    return safelyExecuteRequest(url, put);
   }
 
   protected String getJsonAssertOkAndReturnBody(String url) {
@@ -492,8 +502,10 @@ public class HttpAdminClient implements Admin {
     ClassicRequestBuilder requestBuilder =
         ClassicRequestBuilder.create(requestSpec.method().getName()).setUri(url);
 
-    if (requestBody != null) {
-      requestBuilder.setEntity(jsonStringEntity(Json.write(requestBody)));
+    if (requestSpec.method().hasEntity()) {
+      requestBuilder.setEntity(
+          jsonStringEntity(Optional.ofNullable(requestBody).map(Json::write).orElse("")));
+      requestBuilder.addHeader(CONTENT_TYPE, "application/json");
     }
 
     String responseBodyString = safelyExecuteRequest(url, requestBuilder.build());
@@ -501,7 +513,7 @@ public class HttpAdminClient implements Admin {
     return responseType == Void.class ? null : Json.read(responseBodyString, responseType);
   }
 
-  private String safelyExecuteRequest(String url, ClassicHttpRequest request) {
+  private void injectHeaders(ClassicHttpRequest request) {
     if (hostHeader != null) {
       request.addHeader(HOST, hostHeader);
     }
@@ -512,22 +524,33 @@ public class HttpAdminClient implements Admin {
         request.addHeader(header.key(), value);
       }
     }
+  }
+
+  private void verifyResponseStatus(String url, int responseStatusCode) {
+    if (HttpStatus.isServerError(responseStatusCode)) {
+      throw new VerificationException(responseStatusErrorMessage(url, responseStatusCode));
+    }
+
+    if (responseStatusCode == 401) {
+      throw new NotAuthorisedException(responseStatusErrorMessage(url, responseStatusCode));
+    }
+  }
+
+  private String responseStatusErrorMessage(String url, int responseStatusCode) {
+    return "Expected status 2xx for " + url + " but was " + responseStatusCode;
+  }
+
+  private String safelyExecuteRequest(String url, ClassicHttpRequest request) {
+    injectHeaders(request);
 
     try (CloseableHttpResponse response = httpClient.execute(request)) {
       int statusCode = response.getCode();
-      if (HttpStatus.isServerError(statusCode)) {
-        throw new VerificationException(
-            "Expected status 2xx for " + url + " but was " + statusCode);
-      }
 
-      if (statusCode == 401) {
-        throw new NotAuthorisedException();
-      }
+      verifyResponseStatus(url, statusCode);
 
       String body = getEntityAsStringAndCloseStream(response);
       if (HttpStatus.isClientError(statusCode)) {
-        Errors errors = Json.read(body, Errors.class);
-        throw ClientError.fromErrors(errors);
+        throwParsedClientError(url, body, statusCode);
       }
 
       return body;
@@ -536,9 +559,43 @@ public class HttpAdminClient implements Admin {
     }
   }
 
+  private void throwParsedClientError(String url, String responseBody, int responseStatusCode) {
+    Errors errors;
+    try {
+      errors = Json.read(responseBody, Errors.class);
+    } catch (JsonException e) {
+      Errors.Error jsonError = e.getErrors().first();
+      String jsonErrorDetail = jsonError.getDetail();
+      String extendedDetail =
+          new StringBuilder()
+              .append("Error parsing response body '")
+              .append(responseBody)
+              .append("' with status code ")
+              .append(responseStatusCode)
+              .append(" for ")
+              .append(url)
+              .append(". Error: ")
+              .append(jsonErrorDetail)
+              .toString();
+      errors =
+          Errors.single(
+              jsonError.getCode(),
+              jsonError.getSource().getPointer(),
+              jsonError.getTitle(),
+              extendedDetail);
+    }
+
+    throw ClientError.fromErrors(errors);
+  }
+
   private String urlFor(Class<? extends AdminTask> taskClass) {
+    return urlFor(taskClass, PathParams.empty());
+  }
+
+  private String urlFor(Class<? extends AdminTask> taskClass, PathParams pathParams) {
     RequestSpec requestSpec = adminRoutes.requestSpecForTask(taskClass);
-    checkNotNull(requestSpec, "No admin task URL is registered for " + taskClass.getSimpleName());
-    return String.format(ADMIN_URL_PREFIX + requestSpec.path(), scheme, host, port, urlPathPrefix);
+    requireNonNull(requestSpec, "No admin task URL is registered for " + taskClass.getSimpleName());
+    return String.format(
+        ADMIN_URL_PREFIX + requestSpec.path(pathParams), scheme, host, port, urlPathPrefix);
   }
 }

@@ -15,28 +15,18 @@
  */
 package com.github.tomakehurst.wiremock.admin.tasks;
 
-import com.github.tomakehurst.wiremock.admin.AdminTask;
-import com.github.tomakehurst.wiremock.admin.model.SingleStubMappingResult;
-import com.github.tomakehurst.wiremock.common.url.PathParams;
 import com.github.tomakehurst.wiremock.core.Admin;
-import com.github.tomakehurst.wiremock.http.Request;
 import com.github.tomakehurst.wiremock.http.ResponseDefinition;
+import com.github.tomakehurst.wiremock.stubbing.ServeEvent;
 import com.github.tomakehurst.wiremock.stubbing.StubMapping;
-import java.util.UUID;
 
-public class EditStubMappingTask implements AdminTask {
+public class EditStubMappingTask extends AbstractSingleStubTask {
 
   @Override
-  public ResponseDefinition execute(Admin admin, Request request, PathParams pathParams) {
-    StubMapping newStubMapping = StubMapping.buildFrom(request.getBodyAsString());
-    UUID id = UUID.fromString(pathParams.get("id"));
-    SingleStubMappingResult stubMappingResult = admin.getStubMapping(id);
-    if (!stubMappingResult.isPresent()) {
-      return ResponseDefinition.notFound();
-    }
-
-    newStubMapping.setId(id);
-
+  protected ResponseDefinition processStubMapping(
+      Admin admin, ServeEvent serveEvent, StubMapping stubMapping) {
+    StubMapping newStubMapping = StubMapping.buildFrom(serveEvent.getRequest().getBodyAsString());
+    newStubMapping.setId(stubMapping.getId());
     admin.editStubMapping(newStubMapping);
     return ResponseDefinition.okForJson(newStubMapping);
   }

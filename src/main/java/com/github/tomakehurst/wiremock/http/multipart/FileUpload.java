@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022 Thomas Akehurst
+ * Copyright (C) 2022-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,11 +17,11 @@ package com.github.tomakehurst.wiremock.http.multipart;
 
 import static java.lang.String.format;
 
+import com.github.tomakehurst.wiremock.common.Exceptions;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.PipedInputStream;
-import java.io.PipedOutputStream;
 import java.io.UnsupportedEncodingException;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -47,7 +47,6 @@ import org.apache.commons.fileupload.util.Closeable;
 import org.apache.commons.fileupload.util.FileItemHeadersImpl;
 import org.apache.commons.fileupload.util.LimitedInputStream;
 import org.apache.commons.fileupload.util.Streams;
-import org.apache.commons.io.IOUtils;
 
 /**
  * The implementation is largely ported from {@link org.apache.commons.fileupload.FileUpload} and
@@ -58,6 +57,9 @@ import org.apache.commons.io.IOUtils;
  * re-implementing this part of the upload.
  */
 class FileUpload {
+  /** HTTP content type header for multiple related data. */
+  private static final String MULTIPART_RELATED = "multipart/related";
+
   private final FileItemFactory fileItemFactory;
 
   FileUpload(FileItemFactory fileItemFactory) {
@@ -103,7 +105,7 @@ class FileUpload {
    * @throws FileUploadException if there are problems reading/parsing the request or storing files.
    */
   public List<FileItem> parseRequest(RequestContext ctx) throws FileUploadException {
-    List<FileItem> items = new ArrayList<FileItem>();
+    List<FileItem> items = new ArrayList<>();
     boolean successful = false;
     try {
       FileItemIterator iter = getItemIterator(ctx);
@@ -394,7 +396,7 @@ class FileUpload {
                 new FileSizeLimitExceededException(
                     format(
                         "The field %s exceeds its maximum permitted size of %s bytes.",
-                        fieldName, Long.valueOf(fileSizeMax)),
+                        fieldName, fileSizeMax),
                     pContentLength,
                     fileSizeMax);
             e.setFileName(pName);
@@ -403,11 +405,7 @@ class FileUpload {
           }
         }
         // OK to construct stream now
-        PipedInputStream itemStream = new PipedInputStream();
-        try (final PipedOutputStream out = new PipedOutputStream(itemStream)) {
-          multi.readBodyData(out);
-        }
-
+        final MultipartStream.ItemInputStream itemStream = newInputStream(multi);
         InputStream istream = itemStream;
         if (fileSizeMax != -1) {
           istream =
@@ -419,7 +417,7 @@ class FileUpload {
                       new FileSizeLimitExceededException(
                           format(
                               "The field %s exceeds its maximum permitted size of %s bytes.",
-                              fieldName, Long.valueOf(pSizeMax)),
+                              fieldName, pSizeMax),
                           pCount,
                           pSizeMax);
                   e.setFieldName(fieldName);
@@ -429,6 +427,17 @@ class FileUpload {
               };
         }
         stream = istream;
+      }
+
+      private MultipartStream.ItemInputStream newInputStream(MultipartStream multipartStream) {
+        return Exceptions.uncheck(
+            () -> {
+              final Method newInputStreamMethod =
+                  multipartStream.getClass().getDeclaredMethod("newInputStream");
+              newInputStreamMethod.setAccessible(true);
+              return (MultipartStream.ItemInputStream) newInputStreamMethod.invoke(multipartStream);
+            },
+            MultipartStream.ItemInputStream.class);
       }
 
       /**
@@ -542,6 +551,9 @@ class FileUpload {
     /** Whether we have seen the end of the file. */
     private boolean eof;
 
+    /** Is this a multipart/related Request */
+    private final boolean multipartRelated;
+
     /**
      * Creates a new instance.
      *
@@ -559,9 +571,14 @@ class FileUpload {
           || (!contentType.toLowerCase(Locale.ENGLISH).startsWith(FileUploadBase.MULTIPART))) {
         throw new InvalidContentTypeException(
             format(
-                "the request doesn't contain a %s or %s stream, content type header is %s",
-                FileUploadBase.MULTIPART_FORM_DATA, FileUploadBase.MULTIPART_MIXED, contentType));
+                "the request neither contain a %s nor a %s nor a %s stream, content type header is %s",
+                FileUploadBase.MULTIPART_FORM_DATA,
+                FileUploadBase.MULTIPART_MIXED,
+                MULTIPART_RELATED,
+                contentType));
       }
+
+      multipartRelated = contentType.toLowerCase(Locale.ENGLISH).startsWith(MULTIPART_RELATED);
 
       @SuppressWarnings("deprecation") // still has to be backward compatible
       final int contentLengthInt = ctx.getContentLength();
@@ -573,60 +590,59 @@ class FileUpload {
               : contentLengthInt;
       // CHECKSTYLE:ON
 
-      InputStream input; // N.B. this is eventually closed in MultipartStream processing
+      ; // N.B. this is eventually closed in MultipartStream processing
       if (sizeMax >= 0) {
         if (requestSize != -1 && requestSize > sizeMax) {
           throw new SizeLimitExceededException(
               format(
                   "the request was rejected because its size (%s) exceeds the configured maximum (%s)",
-                  Long.valueOf(requestSize), Long.valueOf(sizeMax)),
+                  requestSize, sizeMax),
               requestSize,
               sizeMax);
         }
-        // N.B. this is eventually closed in MultipartStream processing
-        input =
-            new LimitedInputStream(ctx.getInputStream(), sizeMax) {
-              @Override
-              protected void raiseError(long pSizeMax, long pCount) throws IOException {
-                FileUploadException ex =
-                    new SizeLimitExceededException(
-                        format(
-                            "the request was rejected because its size (%s) exceeds the configured maximum (%s)",
-                            Long.valueOf(pCount), Long.valueOf(pSizeMax)),
-                        pCount,
-                        pSizeMax);
-                throw new FileUploadIOException(ex);
+      }
+
+      try (InputStream input =
+          sizeMax >= 0
+              ? new LimitedInputStream(ctx.getInputStream(), sizeMax) {
+                @Override
+                protected void raiseError(long pSizeMax, long pCount) throws IOException {
+                  FileUploadException ex =
+                      new SizeLimitExceededException(
+                          format(
+                              "the request was rejected because its size (%s) exceeds the configured maximum (%s)",
+                              pCount, pSizeMax),
+                          pCount,
+                          pSizeMax);
+                  throw new FileUploadIOException(ex);
+                }
               }
-            };
-      } else {
-        input = ctx.getInputStream();
-      }
+              : ctx.getInputStream()) {
+        String charEncoding = headerEncoding;
+        if (charEncoding == null) {
+          charEncoding = ctx.getCharacterEncoding();
+        }
 
-      String charEncoding = headerEncoding;
-      if (charEncoding == null) {
-        charEncoding = ctx.getCharacterEncoding();
-      }
+        boundary = getBoundary(contentType);
+        if (boundary == null) {
+          throw new FileUploadException(
+              "the request was rejected because no multipart boundary was found");
+        }
 
-      boundary = getBoundary(contentType);
-      if (boundary == null) {
-        IOUtils.closeQuietly(input); // avoid possible resource leak
-        throw new FileUploadException(
-            "the request was rejected because no multipart boundary was found");
-      }
+        try {
+          multi = new MultipartStream(input, boundary, 4096, null);
+        } catch (IllegalArgumentException iae) {
+          throw new InvalidContentTypeException(
+              format(
+                  "The boundary specified in the %s header is too long",
+                  FileUploadBase.CONTENT_TYPE),
+              iae);
+        }
+        multi.setHeaderEncoding(charEncoding);
 
-      try {
-        multi = new MultipartStream(input, boundary, 4096, null);
-      } catch (IllegalArgumentException iae) {
-        IOUtils.closeQuietly(input); // avoid possible resource leak
-        throw new InvalidContentTypeException(
-            format(
-                "The boundary specified in the %s header is too long", FileUploadBase.CONTENT_TYPE),
-            iae);
+        skipPreamble = true;
+        findNextItem();
       }
-      multi.setHeaderEncoding(charEncoding);
-
-      skipPreamble = true;
-      findNextItem();
     }
 
     /**
@@ -662,7 +678,19 @@ class FileUpload {
           continue;
         }
         FileItemHeaders headers = getParsedHeaders(multi.readHeaders());
-        if (currentFieldName == null) {
+        if (multipartRelated) {
+          currentFieldName = "";
+          currentItem =
+              new FileItemStreamImpl(
+                  null,
+                  null,
+                  headers.getHeader(FileUploadBase.CONTENT_TYPE),
+                  false,
+                  getContentLength(headers));
+          currentItem.setHeaders(headers);
+          itemValid = true;
+          return true;
+        } else if (currentFieldName == null) {
           // We're parsing the outer multipart
           String fieldName = getFieldName(headers);
           if (fieldName != null) {

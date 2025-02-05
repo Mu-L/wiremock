@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Thomas Akehurst
+ * Copyright (C) 2019-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,14 +15,12 @@
  */
 package com.github.tomakehurst.wiremock.http.multipart;
 
-import com.github.tomakehurst.wiremock.http.Body;
-import com.github.tomakehurst.wiremock.http.HttpHeader;
-import com.github.tomakehurst.wiremock.http.HttpHeaders;
-import com.github.tomakehurst.wiremock.http.Request;
-import com.google.common.base.Function;
-import com.google.common.collect.ImmutableList;
-import com.google.common.collect.Iterators;
+import com.github.tomakehurst.wiremock.http.*;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Iterator;
+import java.util.List;
+import java.util.function.Function;
 import org.apache.commons.fileupload.FileItem;
 import org.apache.commons.fileupload.FileItemHeaders;
 
@@ -40,34 +38,35 @@ public class FileItemPartAdapter implements Request.Part {
   }
 
   @Override
+  public String getFileName() {
+    return fileItem.getName();
+  }
+
+  @Override
   public HttpHeader getHeader(String name) {
     Iterator<String> headerValues = fileItem.getHeaders().getHeaders(name);
-    return new HttpHeader(name, Iterators.toArray(headerValues, String.class));
+    List<String> values = new ArrayList<>();
+    headerValues.forEachRemaining(values::add);
+    return new HttpHeader(name, values);
   }
 
   @Override
   public HttpHeaders getHeaders() {
     FileItemHeaders headers = fileItem.getHeaders();
     Iterator<String> i = headers.getHeaderNames();
-    ImmutableList.Builder<HttpHeader> builder = ImmutableList.builder();
+    List<HttpHeader> headersList = new ArrayList<>();
     while (i.hasNext()) {
       String name = i.next();
-      builder.add(getHeader(name));
+      headersList.add(getHeader(name));
     }
 
-    return new HttpHeaders(builder.build());
+    return new HttpHeaders(Collections.unmodifiableList(headersList));
   }
 
   @Override
   public Body getBody() {
-    return new Body(fileItem.get());
+    return Body.ofBinaryOrText(fileItem.get(), new ContentTypeHeader(fileItem.getContentType()));
   }
 
-  public static final Function<FileItem, Request.Part> TO_PARTS =
-      new Function<FileItem, Request.Part>() {
-        @Override
-        public Request.Part apply(FileItem fileItem) {
-          return new FileItemPartAdapter(fileItem);
-        }
-      };
+  public static final Function<FileItem, Request.Part> TO_PARTS = FileItemPartAdapter::new;
 }

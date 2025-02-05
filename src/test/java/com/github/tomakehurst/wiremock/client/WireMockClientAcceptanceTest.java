@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2021 Thomas Akehurst
+ * Copyright (C) 2011-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,16 +17,19 @@ package com.github.tomakehurst.wiremock.client;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.emptyOrNullString;
 import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.not;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.core.Options;
+import com.github.tomakehurst.wiremock.testsupport.WireMockResponse;
 import com.github.tomakehurst.wiremock.testsupport.WireMockTestClient;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-public class WireMockClientAcceptanceTest {
+class WireMockClientAcceptanceTest {
 
   private WireMockServer wireMockServer;
   private WireMockTestClient testClient;
@@ -45,7 +48,7 @@ public class WireMockClientAcceptanceTest {
   }
 
   @Test
-  public void buildsMappingWithUrlOnlyRequestAndStatusOnlyResponse() {
+  void buildsMappingWithUrlOnlyRequestAndStatusOnlyResponse() {
     WireMock wireMock = WireMock.create().port(wireMockServer.port()).build();
     wireMock.register(get(urlEqualTo("/my/new/resource")).willReturn(aResponse().withStatus(304)));
 
@@ -53,14 +56,14 @@ public class WireMockClientAcceptanceTest {
   }
 
   @Test
-  public void buildsMappingFromStaticSyntax() {
+  void buildsMappingFromStaticSyntax() {
     givenThat(get(urlEqualTo("/my/new/resource")).willReturn(aResponse().withStatus(304)));
 
     assertThat(testClient.get("/my/new/resource").statusCode(), is(304));
   }
 
   @Test
-  public void buildsMappingWithUrlOnyRequestAndResponseWithJsonBodyWithDiacriticSigns() {
+  void buildsMappingWithUrlOnyRequestAndResponseWithJsonBodyWithDiacriticSigns() {
     WireMock wireMock = WireMock.create().port(wireMockServer.port()).build();
     wireMock.register(
         get(urlEqualTo("/my/new/resource"))
@@ -69,5 +72,67 @@ public class WireMockClientAcceptanceTest {
 
     assertThat(
         testClient.get("/my/new/resource").content(), is("{\"address\":\"Puerto Banús, Málaga\"}"));
+  }
+
+  @Test
+  void testGetOrHeadRequestWhenGetMatchesShouldReturnAResponseBody() {
+    String path = "/get-or-head-test";
+    WireMock wireMock = WireMock.create().port(wireMockServer.port()).build();
+    wireMock.register(
+        getOrHead(urlEqualTo(path))
+            .willReturn(okJson("{\"key\": \"value\"}").withHeader("Content-Length", "16")));
+
+    WireMockResponse response = testClient.get(path);
+
+    assertThat(response.statusCode(), is(200));
+    assertThat(response.firstHeader("Content-Type"), is("application/json"));
+    assertThat(response.firstHeader("Content-Length"), is("16"));
+    assertThat(response.content(), not(emptyOrNullString()));
+  }
+
+  @Test
+  void testGetOrHeadRequestWhenHeadMatchesShouldNotReturnAResponseBody() {
+    String path = "/get-or-head-test";
+    WireMock wireMock = WireMock.create().port(wireMockServer.port()).build();
+
+    wireMock.register(
+        getOrHead(urlEqualTo(path))
+            .willReturn(
+                okJson("{\"key\": \"value\"}")
+                    .withHeader("Content-Type", "application/json")
+                    .withHeader("Content-Length", "16")));
+    WireMockResponse response = testClient.head(path);
+
+    assertThat(response.statusCode(), is(200));
+    assertThat(response.firstHeader("Content-Type"), is("application/json"));
+    assertThat(response.firstHeader("Content-Length"), is("16"));
+    assertThat(response.content(), is(emptyOrNullString()));
+  }
+
+  @Test
+  void testGetOrHeadRequestWhenNoMethodNotMatchesShouldReturn404() {
+    String path = "/get-or-head-test";
+    WireMock wireMock = WireMock.create().port(wireMockServer.port()).build();
+    wireMock.register(
+        getOrHead(urlEqualTo(path))
+            .willReturn(ok().withHeader("Content-Type", "application/json")));
+    WireMockResponse response = testClient.delete(path);
+
+    assertThat(response.statusCode(), is(404));
+  }
+
+  @Test
+  void testGetOrHeadRequestWhenPathDoesNotMatchShouldReturn404() {
+    String correctPath = "/get-or-head-path-correct";
+    String incorrectPath = "/get-or-head-path-incorrect";
+    WireMock wireMock = WireMock.create().port(wireMockServer.port()).build();
+    wireMock.register(
+        getOrHead(urlEqualTo(correctPath))
+            .willReturn(ok().withHeader("Content-Type", "application/json")));
+    WireMockResponse responseGet = testClient.get(incorrectPath);
+    WireMockResponse responseHead = testClient.head(incorrectPath);
+
+    assertThat(responseGet.statusCode(), is(404));
+    assertThat(responseHead.statusCode(), is(404));
   }
 }

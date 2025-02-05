@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2022 Thomas Akehurst
+ * Copyright (C) 2011-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,9 +21,8 @@ import static com.github.tomakehurst.wiremock.http.HttpHeader.httpHeader;
 import static com.github.tomakehurst.wiremock.http.RequestMethod.GET;
 import static com.github.tomakehurst.wiremock.http.RequestMethod.POST;
 import static com.github.tomakehurst.wiremock.http.Response.response;
-import static com.github.tomakehurst.wiremock.testsupport.WireMatchers.equalToBinaryJson;
-import static com.google.common.base.Charsets.UTF_8;
-import static com.google.common.collect.Lists.transform;
+import static com.github.tomakehurst.wiremock.testsupport.WireMatchers.*;
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.endsWith;
 import static org.mockito.ArgumentMatchers.any;
@@ -41,12 +40,17 @@ import com.github.tomakehurst.wiremock.store.BlobStore;
 import com.github.tomakehurst.wiremock.testsupport.MockRequestBuilder;
 import com.github.tomakehurst.wiremock.verification.VerificationResult;
 import java.util.*;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.skyscreamer.jsonassert.JSONCompareMode;
 
-public class StubMappingJsonRecorderTest {
+/**
+ * @deprecated this test is for the legacy recorder which will be removed before 3.x is out of beta
+ */
+@Deprecated
+class StubMappingJsonRecorderTest {
 
   private StubMappingJsonRecorder listener;
 
@@ -71,7 +75,9 @@ public class StubMappingJsonRecorderTest {
             mappingsBlobStore,
             filesBlobStore,
             admin,
-            transform(headersToRecord, TO_CASE_INSENSITIVE_KEYS));
+            headersToRecord.stream()
+                .map(TO_CASE_INSENSITIVE_KEYS)
+                .collect(Collectors.toUnmodifiableList()));
     listener.setIdGenerator(fixedIdGenerator("1$2!3"));
   }
 
@@ -88,7 +94,7 @@ public class StubMappingJsonRecorderTest {
           + "}													               ";
 
   @Test
-  public void writesMappingFileAndCorrespondingBodyFileOnRequest() {
+  void writesMappingFileAndCorrespondingBodyFileOnRequest() {
     when(admin.countRequestsMatching((any(RequestPattern.class))))
         .thenReturn(VerificationResult.withCount(0));
 
@@ -126,7 +132,7 @@ public class StubMappingJsonRecorderTest {
           + "}                                                                  ";
 
   @Test
-  public void addsResponseHeaders() {
+  void addsResponseHeaders() {
     when(admin.countRequestsMatching((any(RequestPattern.class))))
         .thenReturn(VerificationResult.withCount(0));
 
@@ -155,7 +161,7 @@ public class StubMappingJsonRecorderTest {
   }
 
   @Test
-  public void doesNotWriteFileIfRequestAlreadyReceived() {
+  void doesNotWriteFileIfRequestAlreadyReceived() {
     when(admin.countRequestsMatching((any(RequestPattern.class))))
         .thenReturn(VerificationResult.withCount(1));
 
@@ -168,7 +174,7 @@ public class StubMappingJsonRecorderTest {
   }
 
   @Test
-  public void doesNotWriteFileIfResponseNotFromProxy() {
+  void doesNotWriteFileIfResponseNotFromProxy() {
     when(admin.countRequestsMatching((any(RequestPattern.class))))
         .thenReturn(VerificationResult.withCount(0));
 
@@ -198,7 +204,7 @@ public class StubMappingJsonRecorderTest {
           + "}													               ";
 
   @Test
-  public void includesBodyInRequestPatternIfInRequest() {
+  void includesBodyInRequestPatternIfInRequest() {
     when(admin.countRequestsMatching((any(RequestPattern.class))))
         .thenReturn(VerificationResult.withCount(0));
 
@@ -255,7 +261,7 @@ public class StubMappingJsonRecorderTest {
       new ArrayList<>(Collections.singletonList("Accept"));
 
   @Test
-  public void includesHeadersInRequestPatternIfHeaderMatchingEnabled() {
+  void includesHeadersInRequestPatternIfHeaderMatchingEnabled() {
     constructRecordingListener(MATCHING_REQUEST_HEADERS);
 
     when(admin.countRequestsMatching((any(RequestPattern.class))))
@@ -308,7 +314,7 @@ public class StubMappingJsonRecorderTest {
           + "}";
 
   @Test
-  public void matchesBodyOnEqualToJsonIfJsonInRequestContentTypeHeader() {
+  void matchesBodyOnEqualToJsonIfJsonInRequestContentTypeHeader() {
     when(admin.countRequestsMatching((any(RequestPattern.class))))
         .thenReturn(VerificationResult.withCount(0));
 
@@ -344,7 +350,7 @@ public class StubMappingJsonRecorderTest {
           + "}";
 
   @Test
-  public void matchesBodyOnEqualToXmlIfXmlInRequestContentTypeHeader() {
+  void matchesBodyOnEqualToXmlIfXmlInRequestContentTypeHeader() {
     when(admin.countRequestsMatching((any(RequestPattern.class))))
         .thenReturn(VerificationResult.withCount(0));
     Request request =
@@ -379,7 +385,7 @@ public class StubMappingJsonRecorderTest {
           + "}													               ";
 
   @Test
-  public void decompressesGzippedResponseBodyAndRemovesContentEncodingHeader() {
+  void decompressesGzippedResponseBodyAndRemovesContentEncodingHeader() {
     when(admin.countRequestsMatching((any(RequestPattern.class))))
         .thenReturn(VerificationResult.withCount(0));
 
@@ -411,12 +417,11 @@ public class StubMappingJsonRecorderTest {
   }
 
   private static final String MULTIPART_REQUEST_MAPPING =
-      "{																	\n"
-          + "	\"id\": \"41544750-0c69-3fd7-93b1-f79499f987c3\",				\n"
-          + "	\"uuid\": \"41544750-0c69-3fd7-93b1-f79499f987c3\",				\n"
-          + "	\"request\": {													\n"
-          + "		\"method\": \"POST\",										\n"
-          + "		\"url\": \"/multipart/content\",							\n"
+      "{																	    \n"
+          + "	\"id\" : \"41544750-0c69-3fd7-93b1-f79499f987c3\",				\n"
+          + "	\"request\" : {													\n"
+          + "		\"url\" : \"/multipart/content\",							\n"
+          + "		\"method\" : \"POST\",										\n"
           + "		\"multipartPatterns\" : [ {									\n"
           + "			\"name\" : \"binaryFile\",								\n"
           + "			\"matchingType\" : \"ALL\",								\n"
@@ -445,7 +450,7 @@ public class StubMappingJsonRecorderTest {
           + "			\"headers\" : {											\n"
           + "				\"Content-Disposition\" : {							\n"
           + "					\"contains\" : \"name=\\\"formInput\\\"\"		\n"
-          + "				},													\n"
+          + "				}													\n"
           + "			},														\n"
           + "			\"bodyPatterns\" : [ {									\n"
           + "				\"equalTo\" : \"I am a field!\"						\n"
@@ -455,11 +460,12 @@ public class StubMappingJsonRecorderTest {
           + "	\"response\": {									            	\n"
           + "		\"status\": 200,							            	\n"
           + "		\"bodyFileName\": \"body-multipart-content-1$2!3.txt\"  	\n"
-          + "	}												            	\n"
+          + "	},												            	\n"
+          + "	\"uuid\": \"41544750-0c69-3fd7-93b1-f79499f987c3\"				\n"
           + "}																	";
 
   @Test
-  public void multipartRequestProcessing() {
+  void multipartRequestProcessing() {
     when(admin.countRequestsMatching((any(RequestPattern.class))))
         .thenReturn(VerificationResult.withCount(0));
 
@@ -489,43 +495,81 @@ public class StubMappingJsonRecorderTest {
             argThat(equalToBinaryJson(MULTIPART_REQUEST_MAPPING, STRICT_ORDER)));
   }
 
+  private static final String BAD_MULTIPART_REQUEST_MAPPING =
+      "{ 													             \n"
+          + "	\"id\": \"41544750-0c69-3fd7-93b1-f79499f987c3\",				\n"
+          + "	\"uuid\": \"41544750-0c69-3fd7-93b1-f79499f987c3\",				\n"
+          + "	\"request\": {									             \n"
+          + "		\"url\": \"/multipart/content\",                         \n"
+          + "		\"method\": \"POST\" 						             \n"
+          + "	},												             \n"
+          + "	\"response\": {									             \n"
+          + "		\"status\": 200, 							             \n"
+          + "		\"bodyFileName\": \"body-multipart-content-1$2!3.txt\"        \n"
+          + "	}												             \n"
+          + "}";
+
   @Test
-  public void detectsJsonExtensionFromFileExtension() {
+  void multipartRequestProcessingWithNonFileMultipart() {
+    when(admin.countRequestsMatching((any(RequestPattern.class))))
+        .thenReturn(VerificationResult.withCount(0));
+
+    Request request =
+        new MockRequestBuilder()
+            .withMethod(RequestMethod.POST)
+            .withHeader("Content-Type", "multipart/form-data; boundary=aBoundary")
+            .withUrl("/multipart/content")
+            .withBody("--aBoundary\r\nContent")
+            .withMultiparts(null) // this is what request.getParts returns when parsing doesn't work
+            .build();
+    doReturn(true).when(request).isMultipart();
+
+    listener.requestReceived(
+        request, response().status(200).body("anything").fromProxy(true).build());
+
+    verify(mappingsBlobStore)
+        .put(
+            eq("mapping-multipart-content-1$2!3.json"),
+            argThat(bytesEqualToJson(BAD_MULTIPART_REQUEST_MAPPING, STRICT_ORDER)));
+  }
+
+  @Test
+  void detectsJsonExtensionFromFileExtension() {
     assertResultingFileExtension("/my/file.json", "json");
   }
 
   @Test
-  public void detectsGifExtensionFromFileExtension() {
+  void detectsGifExtensionFromFileExtension() {
     assertResultingFileExtension("/my/file.gif", "gif");
   }
 
   @Test
-  public void detectsXmlExtensionFromResponseContentTypeHeader() {
+  void detectsXmlExtensionFromResponseContentTypeHeader() {
     assertResultingFileExtension("/noext", "xml", "application/xml");
   }
 
   @Test
-  public void detectsJsonExtensionFromResponseContentTypeHeader() {
+  void detectsJsonExtensionFromResponseContentTypeHeader() {
     assertResultingFileExtension("/noext", "json", "application/json");
   }
 
   @Test
-  public void detectsJsonExtensionFromCustomResponseContentTypeHeader() {
+  void detectsJsonExtensionFromCustomResponseContentTypeHeader() {
     assertResultingFileExtension("/noext", "json", "application/vnd.api+json");
   }
 
   @Test
-  public void detectsJpegExtensionFromResponseContentTypeHeader() {
+  void detectsJpegExtensionFromResponseContentTypeHeader() {
     assertResultingFileExtension("/noext", "jpeg", "image/jpeg");
   }
 
   @Test
-  public void detectsIcoExtensionFromResponseContentTypeHeader() {
+  void detectsIcoExtensionFromResponseContentTypeHeader() {
     assertResultingFileExtension("/noext", "ico", "image/x-icon");
   }
 
   @Test
-  public void sanitisesFilenamesBySwappingSymbolsForUnderscores() {
+  void sanitisesFilenamesBySwappingSymbolsForUnderscores() {
     when(admin.countRequestsMatching((any(RequestPattern.class))))
         .thenReturn(VerificationResult.withCount(0));
 

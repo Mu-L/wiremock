@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2021 Thomas Akehurst
+ * Copyright (C) 2017-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,11 +15,12 @@
  */
 package com.github.tomakehurst.wiremock.core;
 
+import static com.github.tomakehurst.wiremock.core.Options.DEFAULT_MAX_TEMPLATE_CACHE_ENTRIES;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
-import com.google.common.base.Optional;
-import org.eclipse.jetty.util.thread.QueuedThreadPool;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 public class WireMockConfigurationTest {
@@ -61,15 +62,21 @@ public class WireMockConfigurationTest {
   }
 
   @Test
-  public void shouldUseQueuedThreadPoolByDefault() {
-    int maxThreads = 20;
+  public void testProxyPassThroughSetAsFalse() {
     WireMockConfiguration wireMockConfiguration =
-        WireMockConfiguration.wireMockConfig().containerThreads(maxThreads);
+        WireMockConfiguration.wireMockConfig().proxyPassThrough(false);
+    assertFalse(wireMockConfiguration.getStores().getSettingsStore().get().getProxyPassThrough());
+  }
 
-    QueuedThreadPool threadPool =
-        (QueuedThreadPool)
-            wireMockConfiguration.threadPoolFactory().buildThreadPool(wireMockConfiguration);
+  @Test
+  void setsMaxTemplateCacheEntries() {
+    Options config = WireMockConfiguration.wireMockConfig().withMaxTemplateCacheEntries(11L);
+    assertThat(config.getMaxTemplateCacheEntries(), is(11L));
+  }
 
-    assertThat(threadPool.getMaxThreads(), is(maxThreads));
+  @Test
+  void maxTemplateCacheEntriesDefaultsWhenNotSpecified() {
+    Options config = WireMockConfiguration.wireMockConfig();
+    assertThat(config.getMaxTemplateCacheEntries(), is(DEFAULT_MAX_TEMPLATE_CACHE_ENTRIES));
   }
 }

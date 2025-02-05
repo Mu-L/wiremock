@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2021 Thomas Akehurst
+ * Copyright (C) 2019-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 package com.github.tomakehurst.wiremock;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
+import static com.github.tomakehurst.wiremock.common.Strings.randomAlphabetic;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 import static com.github.tomakehurst.wiremock.testsupport.TestHttpHeader.withHeader;
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -28,8 +29,6 @@ import com.github.tomakehurst.wiremock.http.ResponseDefinition;
 import com.github.tomakehurst.wiremock.testsupport.WireMockResponse;
 import com.github.tomakehurst.wiremock.testsupport.WireMockTestClient;
 import java.util.Collections;
-import java.util.List;
-import org.apache.commons.lang3.RandomStringUtils;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -145,7 +144,7 @@ public class RequestFilterAcceptanceTest {
 
   @BeforeEach
   public void init() {
-    url = "/" + RandomStringUtils.randomAlphabetic(5);
+    url = "/" + randomAlphabetic(5);
   }
 
   @AfterEach
@@ -164,16 +163,9 @@ public class RequestFilterAcceptanceTest {
     @Override
     public RequestFilterAction filter(Request request) {
       Request newRequest =
-          new RequestWrapper(request) {
-            @Override
-            public HttpHeader header(String key) {
-              if (key.equals("X-Modify-Me")) {
-                return new HttpHeader("X-Modify-Me", "modified");
-              }
-
-              return super.header(key);
-            }
-          };
+          RequestWrapper.create()
+              .transformHeader("X-Modify-Me", values -> Collections.singletonList("modified"))
+              .wrap(request);
 
       return RequestFilterAction.continueWith(newRequest);
     }
@@ -216,12 +208,7 @@ public class RequestFilterAcceptanceTest {
           RequestWrapper.create()
               .transformHeader(
                   "X-Modify-Me",
-                  new FieldTransformer<List<String>>() {
-                    @Override
-                    public List<String> transform(List<String> existingValue) {
-                      return Collections.singletonList(existingValue.get(0) + value);
-                    }
-                  })
+                  existingValue -> Collections.singletonList(existingValue.get(0) + value))
               .wrap(request);
 
       return RequestFilterAction.continueWith(newRequest);
@@ -285,13 +272,7 @@ public class RequestFilterAcceptanceTest {
     public RequestFilterAction filter(Request request) {
       Request wrappedRequest =
           RequestWrapper.create()
-              .transformAbsoluteUrl(
-                  new FieldTransformer<String>() {
-                    @Override
-                    public String transform(String url) {
-                      return url.replace("/subpath", "/prefix/subpath");
-                    }
-                  })
+              .transformAbsoluteUrl(url -> url.replace("/subpath", "/prefix/subpath"))
               .wrap(request);
 
       return RequestFilterAction.continueWith(wrappedRequest);

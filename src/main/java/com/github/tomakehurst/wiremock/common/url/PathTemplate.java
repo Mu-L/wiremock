@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016-2023 Thomas Akehurst
+ * Copyright (C) 2016-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,17 +17,18 @@ package com.github.tomakehurst.wiremock.common.url;
 
 import static java.lang.String.format;
 
-import com.google.common.base.Function;
-import com.google.common.base.Objects;
+import com.github.tomakehurst.wiremock.common.Urls;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
+import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class PathTemplate {
   static final Pattern SPECIAL_SYMBOL_REGEX =
-      Pattern.compile("(?:\\{(?<variable>[^}]+)\\})|(?<wildcard>\\*\\*)");
+      Pattern.compile("\\{(?<variable>[^}]+)}|(?<wildcard>\\*\\*)");
 
   private final String templateString;
   private final Parser parser;
@@ -73,11 +74,11 @@ public class PathTemplate {
   }
 
   public boolean matches(String url) {
-    return parser.matches(url);
+    return parser.matches(Urls.getPath(url));
   }
 
   public PathParams parse(String url) {
-    return parser.parse(url);
+    return parser.parse(Urls.getPath(url));
   }
 
   public String render(PathParams pathParams) {
@@ -85,7 +86,7 @@ public class PathTemplate {
   }
 
   public String withoutVariables() {
-    return templateString.replaceAll(SPECIAL_SYMBOL_REGEX.pattern(), "");
+    return templateString.replaceAll(SPECIAL_SYMBOL_REGEX.pattern(), "_");
   }
 
   private static String stripFormatCharacters(String parameter) {
@@ -102,12 +103,16 @@ public class PathTemplate {
     if (this == o) return true;
     if (o == null || getClass() != o.getClass()) return false;
     PathTemplate that = (PathTemplate) o;
-    return Objects.equal(templateString, that.templateString);
+    return Objects.equals(templateString, that.templateString);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hashCode(templateString);
+    return Objects.hash(templateString);
+  }
+
+  public int numberOfParameters() {
+    return parser.numberOfParameters();
   }
 }
 
@@ -138,6 +143,10 @@ class Parser {
 
     return pathParams;
   }
+
+  int numberOfParameters() {
+    return templateParameters.size();
+  }
 }
 
 class ParserBuilder {
@@ -156,7 +165,7 @@ class ParserBuilder {
 
   void addWildcard() {
     templatePattern.append("(.*?)");
-    templateVariables.add("" + wildcardCount++);
+    templateVariables.add(String.valueOf(wildcardCount++));
   }
 
   Parser build() {
@@ -213,13 +222,13 @@ class RendererBuilder {
   }
 
   void addWildcard() {
-    final String wildcardIndex = "" + wildcardCount++;
+    final String wildcardIndex = String.valueOf(wildcardCount++);
     class Wildcard implements Function<PathParams, String> {
       @Override
       public String apply(PathParams input) {
         String value = input.get(wildcardIndex);
         if (value == null) {
-          throw new IllegalArgumentException(format("Wildcard was not bound"));
+          throw new IllegalArgumentException("Wildcard was not bound");
         }
         return value;
       }

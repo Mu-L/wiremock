@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2023 Thomas Akehurst
+ * Copyright (C) 2020-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,28 +16,34 @@
 package com.github.tomakehurst.wiremock.http;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
-import static com.github.tomakehurst.wiremock.common.NetworkAddressRules.ALLOW_ALL;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.options;
 import static com.github.tomakehurst.wiremock.crypto.X509CertificateVersion.V3;
+import static com.github.tomakehurst.wiremock.http.RequestMethod.GET;
+import static com.github.tomakehurst.wiremock.matching.MockRequest.mockRequest;
+import static com.github.tomakehurst.wiremock.stubbing.ServeEventFactory.newPostMatchServeEvent;
 import static java.net.HttpURLConnection.HTTP_INTERNAL_ERROR;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.core.StringContains.containsString;
 import static org.hamcrest.core.StringStartsWith.startsWith;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.assertArg;
 import static org.mockito.Mockito.spy;
 
+import com.github.tomakehurst.wiremock.common.NetworkAddressRules;
 import com.github.tomakehurst.wiremock.common.ProxySettings;
 import com.github.tomakehurst.wiremock.common.ssl.KeyStoreSettings;
 import com.github.tomakehurst.wiremock.crypto.CertificateSpecification;
 import com.github.tomakehurst.wiremock.crypto.InMemoryKeyStore;
 import com.github.tomakehurst.wiremock.crypto.Secret;
 import com.github.tomakehurst.wiremock.crypto.X509CertificateSpecification;
+import com.github.tomakehurst.wiremock.http.client.ApacheBackedHttpClient;
+import com.github.tomakehurst.wiremock.http.client.HttpClient;
 import com.github.tomakehurst.wiremock.junit5.WireMockExtension;
 import com.github.tomakehurst.wiremock.store.InMemorySettingsStore;
 import com.github.tomakehurst.wiremock.stubbing.ServeEvent;
-import com.github.tomakehurst.wiremock.stubbing.StubMapping;
 import com.github.tomakehurst.wiremock.verification.LoggedRequest;
 import java.io.File;
 import java.io.IOException;
@@ -46,22 +52,29 @@ import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.NoSuchAlgorithmException;
-import java.util.Collections;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.List;
+import java.util.*;
+import java.util.stream.Collectors;
+import org.apache.hc.client5.http.config.RequestConfig;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
+import org.apache.hc.core5.http.NameValuePair;
+import org.apache.hc.core5.http.io.HttpClientResponseHandler;
 import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.DisabledForJreRange;
 import org.junit.jupiter.api.condition.JRE;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.mockito.ArgumentMatchers;
 import org.mockito.Mockito;
 
 @DisabledForJreRange(
     min = JRE.JAVA_17,
     disabledReason = "does not support generating certificates at runtime")
 public class ProxyResponseRendererTest {
+
+  private static final int PROXY_TIMEOUT = 200_000;
+
+  CloseableHttpClient reverseProxyApacheClient;
+  CloseableHttpClient forwardProxyApacheClient;
 
   @RegisterExtension
   public WireMockExtension origin =
@@ -121,7 +134,7 @@ public class ProxyResponseRendererTest {
 
   @Test
   void passesThroughCorsResponseHeadersWhenStubCorsDisabled() {
-    ProxyResponseRenderer responseRenderer = buildProxyResponseRenderer(true, false);
+    ProxyResponseRenderer responseRenderer = buildProxyResponseRenderer(true, false, null);
 
     origin.stubFor(
         get("/proxied")
@@ -140,7 +153,7 @@ public class ProxyResponseRendererTest {
 
   @Test
   void doesNotPassThroughCorsResponseHeadersWhenStubCorsEnabled() {
-    ProxyResponseRenderer responseRenderer = buildProxyResponseRenderer(true, true);
+    ProxyResponseRenderer responseRenderer = buildProxyResponseRenderer(true, true, null);
 
     origin.stubFor(
         get("/proxied")
@@ -158,57 +171,53 @@ public class ProxyResponseRendererTest {
 
   @Test
   void doesNotAddEntityIfEmptyBodyReverseProxy() throws IOException {
-    CloseableHttpClient clientSpy =
-        reflectiveSpyField(CloseableHttpClient.class, "reverseProxyClient", proxyResponseRenderer);
-
     ServeEvent serveEvent = reverseProxyServeEvent("/proxied");
 
     proxyResponseRenderer.render(serveEvent);
-    Mockito.verify(clientSpy).execute(argThat(request -> request.getEntity() == null));
+    Mockito.verify(reverseProxyApacheClient)
+        .execute(
+            argThat(request -> request.getEntity() == null),
+            ArgumentMatchers.any(HttpClientResponseHandler.class));
   }
 
   @Test
   void doesNotAddEntityIfEmptyBodyForwardProxy() throws IOException {
-    CloseableHttpClient clientSpy =
-        reflectiveSpyField(CloseableHttpClient.class, "forwardProxyClient", proxyResponseRenderer);
-
     ServeEvent serveEvent = forwardProxyServeEvent("/proxied");
 
     proxyResponseRenderer.render(serveEvent);
-    Mockito.verify(clientSpy).execute(argThat(request -> request.getEntity() == null));
+    Mockito.verify(forwardProxyApacheClient)
+        .execute(
+            argThat(request -> request.getEntity() == null),
+            ArgumentMatchers.any(HttpClientResponseHandler.class));
   }
 
   @Test
   void addsEntityIfNotEmptyBodyReverseProxy() throws IOException {
-    CloseableHttpClient clientSpy =
-        reflectiveSpyField(CloseableHttpClient.class, "reverseProxyClient", proxyResponseRenderer);
-
     ServeEvent serveEvent =
         serveEvent("/proxied", false, "Text body".getBytes(StandardCharsets.UTF_8));
 
     proxyResponseRenderer.render(serveEvent);
-    Mockito.verify(clientSpy).execute(argThat(request -> request.getEntity() != null));
+    Mockito.verify(reverseProxyApacheClient)
+        .execute(
+            argThat(request -> request.getEntity() != null),
+            ArgumentMatchers.any(HttpClientResponseHandler.class));
   }
 
   @Test
   void addsEntityIfNotEmptyBodyForwardProxy() throws IOException {
-    CloseableHttpClient clientSpy =
-        reflectiveSpyField(CloseableHttpClient.class, "forwardProxyClient", proxyResponseRenderer);
-
     ServeEvent serveEvent =
         serveEvent("/proxied", true, "Text body".getBytes(StandardCharsets.UTF_8));
 
     proxyResponseRenderer.render(serveEvent);
-    Mockito.verify(clientSpy).execute(argThat(request -> request.getEntity() != null));
+    Mockito.verify(forwardProxyApacheClient)
+        .execute(
+            argThat(request -> request.getEntity() != null),
+            ArgumentMatchers.any(HttpClientResponseHandler.class));
   }
 
   @Test
   void addsEmptyEntityIfEmptyBodyForwardProxyPOST() throws IOException {
     ProxyResponseRenderer trustAllProxyResponseRenderer = buildProxyResponseRenderer(true);
-    CloseableHttpClient clientSpy =
-        reflectiveSpyField(
-            CloseableHttpClient.class, "forwardProxyClient", trustAllProxyResponseRenderer);
-
     origin.stubFor(post("/proxied/empty-post").willReturn(aResponse().withBody("Result")));
 
     ServeEvent serveEvent =
@@ -220,7 +229,10 @@ public class ProxyResponseRendererTest {
             new HttpHeaders(new HttpHeader("Content-Length", "0")));
 
     trustAllProxyResponseRenderer.render(serveEvent);
-    Mockito.verify(clientSpy).execute(argThat(request -> request.getEntity() != null));
+    Mockito.verify(forwardProxyApacheClient)
+        .execute(
+            argThat(request -> request.getEntity() != null),
+            ArgumentMatchers.any(HttpClientResponseHandler.class));
     List<LoggedRequest> requests =
         origin.findAll(postRequestedFor(urlPathMatching("/proxied/empty-post")));
     Assertions.assertThat(requests)
@@ -232,10 +244,6 @@ public class ProxyResponseRendererTest {
   @Test
   void addsEmptyEntityIfEmptyBodyForwardProxyGET() throws IOException {
     ProxyResponseRenderer trustAllProxyResponseRenderer = buildProxyResponseRenderer(true);
-    CloseableHttpClient clientSpy =
-        reflectiveSpyField(
-            CloseableHttpClient.class, "forwardProxyClient", trustAllProxyResponseRenderer);
-
     origin.stubFor(get("/proxied/empty-get").willReturn(aResponse().withBody("Result")));
 
     ServeEvent serveEvent =
@@ -243,17 +251,186 @@ public class ProxyResponseRendererTest {
             "/proxied/empty-get",
             true,
             new byte[0],
-            RequestMethod.GET,
+            GET,
             new HttpHeaders(new HttpHeader("Content-Length", "0")));
 
     trustAllProxyResponseRenderer.render(serveEvent);
-    Mockito.verify(clientSpy).execute(argThat(request -> request.getEntity() != null));
+    Mockito.verify(forwardProxyApacheClient)
+        .execute(
+            argThat(request -> request.getEntity() != null),
+            ArgumentMatchers.any(HttpClientResponseHandler.class));
     List<LoggedRequest> requests =
         origin.findAll(getRequestedFor(urlPathMatching("/proxied/empty-get")));
     Assertions.assertThat(requests)
         .hasSizeGreaterThan(0)
         .allMatch(r -> "0".equals(r.getHeader("Content-Length")))
         .noneMatch(r -> r.containsHeader("Content-Type"));
+  }
+
+  @Test
+  void usesCorrectProxyRequestTimeout() {
+    RequestConfig forwardProxyClientRequestConfig =
+        reflectiveSpyField(RequestConfig.class, "defaultConfig", forwardProxyApacheClient);
+    RequestConfig reverseProxyClientRequestConfig =
+        reflectiveSpyField(RequestConfig.class, "defaultConfig", reverseProxyApacheClient);
+
+    assertThat(
+        forwardProxyClientRequestConfig.getResponseTimeout().toMilliseconds(),
+        is((long) PROXY_TIMEOUT));
+    assertThat(
+        reverseProxyClientRequestConfig.getResponseTimeout().toMilliseconds(),
+        is((long) PROXY_TIMEOUT));
+  }
+
+  @Test
+  void additionalProxyRequestHeaders() throws IOException {
+    ServeEvent serveEvent =
+        serveEvent(
+            "/proxied",
+            false,
+            null,
+            RequestMethod.GET,
+            new HttpHeaders(),
+            aResponse()
+                .proxiedFrom(origin.baseUrl())
+                .withAdditionalRequestHeader("header", "value")
+                .build());
+
+    proxyResponseRenderer.render(serveEvent);
+    Mockito.verify(reverseProxyApacheClient)
+        .execute(
+            argThat(request -> request.getFirstHeader("header").getValue().equals("value")),
+            ArgumentMatchers.any(HttpClientResponseHandler.class));
+  }
+
+  @Test
+  void removeProxyRequestHeaders() throws IOException {
+    ServeEvent serveEvent =
+        serveEvent(
+            "/proxied",
+            false,
+            null,
+            RequestMethod.GET,
+            new HttpHeaders(new HttpHeader("header", "value")),
+            aResponse().proxiedFrom(origin.baseUrl()).withRemoveRequestHeader("Header").build());
+
+    proxyResponseRenderer.render(serveEvent);
+    Mockito.verify(reverseProxyApacheClient)
+        .execute(
+            argThat(request -> request.getHeaders().length == 0),
+            ArgumentMatchers.any(HttpClientResponseHandler.class));
+  }
+
+  @Test
+  void maintainsAcceptEncodingIfNoSupportedEncodingsSpecified() throws IOException {
+
+    Set<String> supportedProxyEncodings = null;
+    ProxyResponseRenderer proxyResponseRenderer =
+        buildProxyResponseRenderer(false, false, supportedProxyEncodings);
+    ServeEvent serveEvent =
+        serveEvent(
+            "/proxied",
+            false,
+            new byte[0],
+            GET,
+            new HttpHeaders(HttpHeader.httpHeader("Accept-Encoding", "gzip,br")));
+
+    proxyResponseRenderer.render(serveEvent);
+    Mockito.verify(reverseProxyApacheClient)
+        .execute(
+            assertArg(
+                request ->
+                    assertThat(
+                        Arrays.stream(request.getHeaders("Accept-Encoding"))
+                            .map(NameValuePair::getValue)
+                            .collect(Collectors.toList()),
+                        is(List.of("gzip,br")))),
+            ArgumentMatchers.any(HttpClientResponseHandler.class));
+  }
+
+  @Test
+  void limitsAcceptEncodingToSupportedEncodings() throws IOException {
+
+    Set<String> supportedProxyEncodings = Set.of("gzip", "br");
+    ProxyResponseRenderer proxyResponseRenderer =
+        buildProxyResponseRenderer(false, false, supportedProxyEncodings);
+    ServeEvent serveEvent =
+        serveEvent(
+            "/proxied",
+            false,
+            new byte[0],
+            GET,
+            new HttpHeaders(HttpHeader.httpHeader("Accept-Encoding", "gzip,deflate,br")));
+
+    proxyResponseRenderer.render(serveEvent);
+    Mockito.verify(reverseProxyApacheClient)
+        .execute(
+            assertArg(
+                request ->
+                    assertThat(
+                        Arrays.stream(request.getHeaders("Accept-Encoding"))
+                            .map(NameValuePair::getValue)
+                            .collect(Collectors.toList()),
+                        is(List.of("gzip,br")))),
+            ArgumentMatchers.any(HttpClientResponseHandler.class));
+  }
+
+  @Test
+  void removesAcceptEncodingIfNoneSupported() throws IOException {
+
+    Set<String> supportedProxyEncodings = Set.of("gzip");
+    ProxyResponseRenderer proxyResponseRenderer =
+        buildProxyResponseRenderer(false, false, supportedProxyEncodings);
+    ServeEvent serveEvent =
+        serveEvent(
+            "/proxied",
+            false,
+            new byte[0],
+            GET,
+            new HttpHeaders(HttpHeader.httpHeader("Accept-Encoding", "deflate,br")));
+
+    proxyResponseRenderer.render(serveEvent);
+    Mockito.verify(reverseProxyApacheClient)
+        .execute(
+            assertArg(request -> assertFalse(request.containsHeader("Accept-Encoding"))),
+            ArgumentMatchers.any(HttpClientResponseHandler.class));
+  }
+
+  private static <T> T reflectiveInnerSpyField(
+      Class<T> fieldType, String outerFieldName, String innerFieldName, Object object) {
+    try {
+      Field outerField = object.getClass().getDeclaredField(outerFieldName);
+      outerField.setAccessible(true);
+      Object outerFieldObject = outerField.get(object);
+      Field innerField = outerFieldObject.getClass().getDeclaredField(innerFieldName);
+      innerField.setAccessible(true);
+      T spy = spy(fieldType.cast(innerField.get(outerFieldObject)));
+      innerField.set(outerFieldObject, spy);
+      return spy;
+    } catch (NoSuchFieldException | IllegalAccessException e) {
+      throw new RuntimeException(e);
+    }
+  }
+
+  @Test
+  void proxyUrlPrefixToRemove() throws IOException {
+    ServeEvent serveEvent =
+        serveEvent(
+            "/prefix/proxied",
+            false,
+            null,
+            RequestMethod.GET,
+            new HttpHeaders(new HttpHeader("header", "value")),
+            aResponse()
+                .proxiedFrom(origin.baseUrl())
+                .withProxyUrlPrefixToRemove("/prefix")
+                .build());
+
+    proxyResponseRenderer.render(serveEvent);
+    Mockito.verify(reverseProxyApacheClient)
+        .execute(
+            argThat(request -> request.getRequestUri().equals("/proxied")),
+            ArgumentMatchers.any(HttpClientResponseHandler.class));
   }
 
   private static <T> T reflectiveSpyField(Class<T> fieldType, String fieldName, Object object) {
@@ -277,7 +454,7 @@ public class ProxyResponseRendererTest {
   }
 
   private ServeEvent serveEvent(String path, boolean isBrowserProxyRequest, byte[] body) {
-    return serveEvent(path, isBrowserProxyRequest, body, RequestMethod.GET, new HttpHeaders());
+    return serveEvent(path, isBrowserProxyRequest, body, GET, new HttpHeaders());
   }
 
   private ServeEvent serveEvent(
@@ -286,23 +463,36 @@ public class ProxyResponseRendererTest {
       byte[] body,
       RequestMethod method,
       HttpHeaders headers) {
+    return serveEvent(
+        path,
+        isBrowserProxyRequest,
+        body,
+        method,
+        headers,
+        aResponse().proxiedFrom(origin.baseUrl()).build());
+  }
+
+  private ServeEvent serveEvent(
+      String path,
+      boolean isBrowserProxyRequest,
+      byte[] body,
+      RequestMethod method,
+      HttpHeaders headers,
+      ResponseDefinition responseDefinition) {
+
     LoggedRequest loggedRequest =
-        new LoggedRequest(
-            /* url = */ path,
-            /* absoluteUrl = */ origin.url(path),
-            /* method = */ method,
-            /* clientIp = */ "127.0.0.1",
-            /* headers = */ headers,
-            /* cookies = */ new HashMap<String, Cookie>(),
-            /* isBrowserProxyRequest = */ isBrowserProxyRequest,
-            /* loggedDate = */ new Date(),
-            /* body = */ body,
-            /* multiparts = */ null,
-            /* protocol = */ "HTTP/1.1");
-    ResponseDefinition responseDefinition = aResponse().proxiedFrom(origin.baseUrl()).build();
+        LoggedRequest.createFrom(
+            mockRequest()
+                .url(path)
+                .absoluteUrl(origin.url(path))
+                .method(method)
+                .headers(headers)
+                .isBrowserProxyRequest(isBrowserProxyRequest)
+                .body(body)
+                .protocol("HTTP/1.1"));
     responseDefinition.setOriginalRequest(loggedRequest);
 
-    return ServeEvent.of(loggedRequest, responseDefinition, new StubMapping());
+    return newPostMatchServeEvent(loggedRequest, responseDefinition);
   }
 
   private File generateKeystore() throws Exception {
@@ -312,11 +502,11 @@ public class ProxyResponseRendererTest {
 
     CertificateSpecification certificateSpecification =
         new X509CertificateSpecification(
-            /* version = */ V3,
-            /* subject = */ "CN=localhost",
-            /* issuer = */ "CN=wiremock.org",
-            /* notBefore = */ new Date(),
-            /* notAfter = */ new Date(System.currentTimeMillis() + (365L * 24 * 60 * 60 * 1000)));
+            /* version= */ V3,
+            /* subject= */ "CN=localhost",
+            /* issuer= */ "CN=wiremock.org",
+            /* notBefore= */ new Date(),
+            /* notAfter= */ new Date(System.currentTimeMillis() + (365L * 24 * 60 * 60 * 1000)));
     KeyPair keyPair = generateKeyPair();
     ks.addPrivateKey("wiremock", keyPair, certificateSpecification.certificateFor(keyPair));
 
@@ -334,21 +524,48 @@ public class ProxyResponseRendererTest {
   }
 
   private ProxyResponseRenderer buildProxyResponseRenderer(boolean trustAllProxyTargets) {
-    return buildProxyResponseRenderer(trustAllProxyTargets, false);
+    return buildProxyResponseRenderer(trustAllProxyTargets, false, null);
   }
 
   private ProxyResponseRenderer buildProxyResponseRenderer(
-      boolean trustAllProxyTargets, boolean stubCorsEnabled) {
+      boolean trustAllProxyTargets, boolean stubCorsEnabled, Set<String> supportedProxyEncodings) {
+
+    reverseProxyApacheClient =
+        spy(
+            HttpClientFactory.createClient(
+                1000,
+                PROXY_TIMEOUT,
+                ProxySettings.NO_PROXY,
+                KeyStoreSettings.NO_STORE,
+                true,
+                Collections.emptyList(),
+                true,
+                NetworkAddressRules.ALLOW_ALL,
+                true));
+    HttpClient reverseProxyClient = new ApacheBackedHttpClient(reverseProxyApacheClient, false);
+
+    forwardProxyApacheClient =
+        spy(
+            HttpClientFactory.createClient(
+                1000,
+                PROXY_TIMEOUT,
+                ProxySettings.NO_PROXY,
+                KeyStoreSettings.NO_STORE,
+                trustAllProxyTargets,
+                Collections.emptyList(),
+                false,
+                NetworkAddressRules.ALLOW_ALL,
+                true));
+    HttpClient forwardProxyClient = new ApacheBackedHttpClient(forwardProxyApacheClient, false);
+
     return new ProxyResponseRenderer(
-        ProxySettings.NO_PROXY,
-        KeyStoreSettings.NO_STORE,
-        /* preserveHostHeader = */ false,
-        /* hostHeaderValue = */ null,
+        /* preserveHostHeader= */ false,
+        /* hostHeaderValue= */ null,
         new InMemorySettingsStore(),
-        trustAllProxyTargets,
-        Collections.<String>emptyList(),
         stubCorsEnabled,
-        ALLOW_ALL);
+        supportedProxyEncodings,
+        reverseProxyClient,
+        forwardProxyClient);
   }
 
   // Just exists to make the compiler happy by having the throws clause

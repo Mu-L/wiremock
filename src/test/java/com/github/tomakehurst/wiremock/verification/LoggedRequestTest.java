@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2023 Thomas Akehurst
+ * Copyright (C) 2012-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,28 +30,21 @@ import com.github.tomakehurst.wiremock.common.Json;
 import com.github.tomakehurst.wiremock.http.Cookie;
 import com.github.tomakehurst.wiremock.http.HttpHeaders;
 import com.github.tomakehurst.wiremock.http.RequestMethod;
-import com.google.common.collect.ImmutableMap;
 import java.io.IOException;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
-import java.util.TimeZone;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.skyscreamer.jsonassert.JSONAssert;
 
+@SuppressWarnings("rawtypes")
 public class LoggedRequestTest {
 
   public static final String REQUEST_BODY = "some text 形声字形聲字";
   public static final String REQUEST_BODY_AS_BASE64 = "c29tZSB0ZXh0IOW9ouWjsOWtl+W9ouiBsuWtlw==";
 
-  @BeforeEach
-  public void init() {
-    System.out.println(TimeZone.getDefault());
-  }
-
   @Test
-  public void headerMatchingIsCaseInsensitive() {
+  void headerMatchingIsCaseInsensitive() {
     LoggedRequest loggedRequest =
         createFrom(
             aRequest()
@@ -94,18 +87,22 @@ public class LoggedRequestTest {
           + "      \"body\" : \""
           + REQUEST_BODY
           + "\",\n"
+          + "      \"protocol\" : \"HTTP/1.1\",\n"
+          + "      \"scheme\" : \"http\",\n"
+          + "      \"host\" : \"mydomain.com\",\n"
+          + "      \"port\" : 80,\n"
           + "      \"loggedDateString\" : \""
           + DATE
           + "\",\n"
+          + "      \"queryParams\" : { },\n"
+          + "      \"formParams\" : { }\n"
           + "    }";
 
   @Test
-  public void jsonRepresentation() throws Exception {
+  void jsonRepresentation() throws Exception {
     HttpHeaders headers = new HttpHeaders(httpHeader("Accept-Language", "en-us,en;q=0.5"));
     Map<String, Cookie> cookies =
-        ImmutableMap.of(
-            "first_cookie", new Cookie("yum"),
-            "monster_cookie", new Cookie("COOKIIIEESS"));
+        Map.of("first_cookie", new Cookie("yum"), "monster_cookie", new Cookie("COOKIIIEESS"));
 
     Date loggedDate = Dates.parse(DATE);
 
@@ -130,7 +127,7 @@ public class LoggedRequestTest {
   }
 
   @Test
-  public void bodyEncodedAsUTF8() throws Exception {
+  void bodyEncodedAsUTF8() {
     LoggedRequest loggedRequest =
         new LoggedRequest(
             "/my/url",
@@ -171,7 +168,7 @@ public class LoggedRequestTest {
           + "}";
 
   @Test
-  public void queryParametersAreSerialized() {
+  void queryParametersAreSerialized() {
     LoggedRequest req =
         new LoggedRequest(
             "/sample/path?test-param-1=value-1&test-param-2=value-2",
@@ -201,7 +198,7 @@ public class LoggedRequestTest {
   }
 
   @Test
-  public void queryParametersAreDeserialized() throws IOException {
+  void queryParametersAreDeserialized() throws IOException {
     LoggedRequest req = new ObjectMapper().readValue(JSON_PARAMS_EXAMPLE, LoggedRequest.class);
 
     assertEquals("test-param-1", req.queryParameter("test-param-1").key());

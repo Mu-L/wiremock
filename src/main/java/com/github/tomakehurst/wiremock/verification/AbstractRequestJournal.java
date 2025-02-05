@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2022 Thomas Akehurst
+ * Copyright (C) 2011-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 package com.github.tomakehurst.wiremock.verification;
 
 import static com.github.tomakehurst.wiremock.matching.RequestPattern.thatMatch;
-import static com.github.tomakehurst.wiremock.matching.RequestPattern.withRequstMatching;
+import static com.github.tomakehurst.wiremock.matching.RequestPattern.withRequestMatching;
 import static java.util.stream.Collectors.toList;
 
 import com.github.tomakehurst.wiremock.common.Json;
@@ -26,8 +26,6 @@ import com.github.tomakehurst.wiremock.matching.StringValuePattern;
 import com.github.tomakehurst.wiremock.store.RequestJournalStore;
 import com.github.tomakehurst.wiremock.stubbing.ServeEvent;
 import com.github.tomakehurst.wiremock.stubbing.StubMapping;
-import com.google.common.base.Optional;
-import com.google.common.collect.ImmutableList;
 import java.util.*;
 import java.util.function.Predicate;
 import java.util.stream.Stream;
@@ -36,15 +34,15 @@ public abstract class AbstractRequestJournal implements RequestJournal {
 
   protected final RequestJournalStore store;
 
-  private final Optional<Integer> maxEntries;
+  private final Integer maxEntries;
   private final Map<String, RequestMatcherExtension> customMatchers;
 
   public AbstractRequestJournal(
-      Optional<Integer> maxEntries,
+      Integer maxEntries,
       Map<String, RequestMatcherExtension> customMatchers,
       RequestJournalStore store) {
 
-    if (maxEntries.isPresent() && maxEntries.get() < 0) {
+    if (maxEntries != null && maxEntries < 0) {
       throw new IllegalArgumentException(
           "Maximum number of entries of journal must be greater than zero");
     }
@@ -60,7 +58,10 @@ public abstract class AbstractRequestJournal implements RequestJournal {
 
   @Override
   public List<LoggedRequest> getRequestsMatching(RequestPattern requestPattern) {
-    return getRequests().filter(thatMatch(requestPattern, customMatchers)).collect(toList());
+    List<LoggedRequest> loggedRequests =
+        getRequests().filter(thatMatch(requestPattern, customMatchers)).collect(toList());
+    Collections.reverse(loggedRequests);
+    return loggedRequests;
   }
 
   @Override
@@ -70,13 +71,18 @@ public abstract class AbstractRequestJournal implements RequestJournal {
   }
 
   @Override
+  public void serveCompleted(ServeEvent serveEvent) {
+    store.put(serveEvent.getId(), serveEvent);
+  }
+
+  @Override
   public void removeEvent(final UUID eventId) {
     store.remove(eventId);
   }
 
   @Override
   public List<ServeEvent> removeEventsMatching(RequestPattern requestPattern) {
-    return removeServeEvents(withRequstMatching(requestPattern)::apply);
+    return removeServeEvents(withRequestMatching(requestPattern, customMatchers));
   }
 
   @Override
@@ -97,12 +103,12 @@ public abstract class AbstractRequestJournal implements RequestJournal {
 
   @Override
   public List<ServeEvent> getAllServeEvents() {
-    return ImmutableList.copyOf(store.getAll().collect(toList())).reverse();
+    return store.getAll().collect(toList());
   }
 
   @Override
   public Optional<ServeEvent> getServeEvent(final UUID id) {
-    return Optional.fromJavaUtil(store.get(id));
+    return store.get(id);
   }
 
   @Override
@@ -115,8 +121,8 @@ public abstract class AbstractRequestJournal implements RequestJournal {
   }
 
   private void removeOldEntries() {
-    if (maxEntries.isPresent()) {
-      while (store.getAllKeys().count() > maxEntries.get()) {
+    if (maxEntries != null) {
+      while (store.getAllKeys().count() > maxEntries) {
         store.removeLast();
       }
     }

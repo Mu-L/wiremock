@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2021 Thomas Akehurst
+ * Copyright (C) 2017-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,8 +16,8 @@
 package com.github.tomakehurst.wiremock.matching;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.containing;
-import static com.google.common.collect.Maps.newLinkedHashMap;
 
+import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -25,7 +25,8 @@ import java.util.Map;
 public class MultipartValuePatternBuilder {
 
   private String name = null;
-  private Map<String, MultiValuePattern> headerPatterns = newLinkedHashMap();
+  private String filename = null;
+  private Map<String, MultiValuePattern> headerPatterns = new LinkedHashMap<>();
   private List<ContentPattern<?>> bodyPatterns = new LinkedList<>();
   private MultipartValuePattern.MatchingType matchingType = MultipartValuePattern.MatchingType.ANY;
 
@@ -45,6 +46,11 @@ public class MultipartValuePatternBuilder {
     return withHeader("Content-Disposition", containing("name=\"" + name + "\""));
   }
 
+  public MultipartValuePatternBuilder withFileName(String filename) {
+    this.filename = filename;
+    return withHeader("Content-Disposition", containing("filename=\"" + filename + "\""));
+  }
+
   public MultipartValuePatternBuilder withHeader(String name, StringValuePattern headerPattern) {
     headerPatterns.put(name, MultiValuePattern.of(headerPattern));
     return this;
@@ -59,7 +65,7 @@ public class MultipartValuePatternBuilder {
     return headerPatterns.isEmpty() && bodyPatterns.isEmpty()
         ? null
         : headerPatterns.isEmpty()
-            ? new MultipartValuePattern(name, matchingType, null, bodyPatterns)
-            : new MultipartValuePattern(name, matchingType, headerPatterns, bodyPatterns);
+            ? new MultipartValuePattern(name, filename, matchingType, null, bodyPatterns)
+            : new MultipartValuePattern(name, filename, matchingType, headerPatterns, bodyPatterns);
   }
 }

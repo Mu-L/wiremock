@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2021 Thomas Akehurst
+ * Copyright (C) 2017-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,10 +15,10 @@
  */
 package com.github.tomakehurst.wiremock.extension.responsetemplating.helpers;
 
-import static com.google.common.base.MoreObjects.firstNonNull;
+import static com.github.tomakehurst.wiremock.common.ParameterUtils.getFirstNonNull;
 
 import com.github.jknack.handlebars.Options;
-import com.github.tomakehurst.wiremock.extension.responsetemplating.RenderCache;
+import com.github.tomakehurst.wiremock.common.RequestCache;
 import com.jayway.jsonpath.Configuration;
 import com.jayway.jsonpath.DocumentContext;
 import com.jayway.jsonpath.InvalidJsonException;
@@ -37,7 +37,7 @@ public class HandlebarsJsonPathHelper extends HandlebarsHelper<Object> {
 
   @Override
   public Object apply(final Object input, final Options options) throws IOException {
-    if (input == null) {
+    if (input == null || (input instanceof String && ((String) input).isEmpty())) {
       return "";
     }
 
@@ -60,9 +60,9 @@ public class HandlebarsJsonPathHelper extends HandlebarsHelper<Object> {
   }
 
   private Object getValue(JsonPath jsonPath, DocumentContext jsonDocument, Options options) {
-    RenderCache renderCache = getRenderCache(options);
-    RenderCache.Key cacheKey = RenderCache.Key.keyFor(Object.class, jsonPath, jsonDocument);
-    Object value = renderCache.get(cacheKey);
+    RequestCache requestCache = getRequestCache(options);
+    RequestCache.Key cacheKey = RequestCache.Key.keyFor(Object.class, jsonPath, jsonDocument);
+    Object value = requestCache.get(cacheKey);
     if (value == null) {
       Object defaultValue = options.hash != null ? options.hash("default") : null;
       try {
@@ -72,23 +72,23 @@ public class HandlebarsJsonPathHelper extends HandlebarsHelper<Object> {
       }
 
       if (value == null) {
-        value = firstNonNull(defaultValue, "");
+        value = getFirstNonNull(defaultValue, "");
       }
 
-      renderCache.put(cacheKey, value);
+      requestCache.put(cacheKey, value);
     }
 
     return value;
   }
 
   private DocumentContext getJsonDocument(Object json, Options options) {
-    RenderCache renderCache = getRenderCache(options);
-    RenderCache.Key cacheKey = RenderCache.Key.keyFor(DocumentContext.class, json);
-    DocumentContext document = renderCache.get(cacheKey);
+    RequestCache requestCache = getRequestCache(options);
+    RequestCache.Key cacheKey = RequestCache.Key.keyFor(DocumentContext.class, json);
+    DocumentContext document = requestCache.get(cacheKey);
     if (document == null) {
       document =
           json instanceof String ? parseContext.parse((String) json) : parseContext.parse(json);
-      renderCache.put(cacheKey, document);
+      requestCache.put(cacheKey, document);
     }
 
     return document;

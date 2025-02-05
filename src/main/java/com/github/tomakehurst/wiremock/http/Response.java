@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2022 Thomas Akehurst
+ * Copyright (C) 2011-2023 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,10 +21,9 @@ import static java.net.HttpURLConnection.HTTP_NOT_FOUND;
 import static java.net.HttpURLConnection.HTTP_OK;
 
 import com.github.tomakehurst.wiremock.common.*;
-import com.google.common.base.Optional;
-import com.google.common.io.ByteStreams;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.Optional;
 
 public class Response {
 
@@ -103,12 +102,9 @@ public class Response {
         return null;
       }
 
-      InputStream trimmedStream =
-          limit != null && !limit.isUnlimited()
-              ? ByteStreams.limit(stream, limit.getValue())
-              : stream;
-
-      return ByteStreams.toByteArray(trimmedStream);
+      return limit != null && !limit.isUnlimited()
+          ? stream.readNBytes(limit.getValue())
+          : stream.readAllBytes();
     }
   }
 
@@ -249,16 +245,14 @@ public class Response {
     private void addDelayIfSpecifiedGloballyOrIn(Integer fixedDelay, Integer globalFixedDelay) {
       Optional<Integer> optionalDelay =
           getDelayFromResponseOrGlobalSetting(fixedDelay, globalFixedDelay);
-      if (optionalDelay.isPresent()) {
-        incrementInitialDelay(optionalDelay.get());
-      }
+      optionalDelay.ifPresent(this::incrementInitialDelay);
     }
 
     private Optional<Integer> getDelayFromResponseOrGlobalSetting(
         Integer fixedDelay, Integer globalFixedDelay) {
       Integer delay = fixedDelay != null ? fixedDelay : globalFixedDelay;
 
-      return Optional.fromNullable(delay);
+      return Optional.ofNullable(delay);
     }
 
     private void addRandomDelayIfSpecifiedGloballyOrIn(

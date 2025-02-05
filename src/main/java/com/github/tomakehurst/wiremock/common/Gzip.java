@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015-2021 Thomas Akehurst
+ * Copyright (C) 2015-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,10 +16,9 @@
 package com.github.tomakehurst.wiremock.common;
 
 import static com.github.tomakehurst.wiremock.common.Exceptions.throwUnchecked;
-import static com.github.tomakehurst.wiremock.common.Strings.DEFAULT_CHARSET;
 import static com.github.tomakehurst.wiremock.common.Strings.bytesFromString;
+import static java.nio.charset.StandardCharsets.UTF_8;
 
-import com.google.common.io.ByteStreams;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -29,6 +28,8 @@ import java.util.zip.GZIPOutputStream;
 
 public class Gzip {
 
+  private Gzip() {}
+
   public static byte[] unGzip(byte[] gzippedContent) {
     if (gzippedContent.length == 0) {
       return new byte[0];
@@ -37,7 +38,7 @@ public class Gzip {
     try {
       GZIPInputStream gzipInputStream =
           new GZIPInputStream(new ByteArrayInputStream(gzippedContent));
-      return ByteStreams.toByteArray(gzipInputStream);
+      return gzipInputStream.readAllBytes();
     } catch (IOException e) {
       return throwUnchecked(e, byte[].class);
     }
@@ -48,7 +49,7 @@ public class Gzip {
   }
 
   public static byte[] gzip(String plainContent) {
-    return gzip(plainContent, DEFAULT_CHARSET);
+    return gzip(plainContent, UTF_8);
   }
 
   public static byte[] gzip(String plainContent, Charset charset) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014-2022 Thomas Akehurst
+ * Copyright (C) 2014-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,30 +16,26 @@
 package com.github.tomakehurst.wiremock.jetty;
 
 import static com.github.tomakehurst.wiremock.common.Exceptions.throwUnchecked;
-import static com.github.tomakehurst.wiremock.jetty.JettyUtils.unwrapResponse;
+import static java.nio.charset.StandardCharsets.UTF_8;
 
 import com.github.tomakehurst.wiremock.core.FaultInjector;
-import com.google.common.base.Charsets;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.net.Socket;
-import java.nio.channels.SocketChannel;
-import org.eclipse.jetty.io.SelectableChannelEndPoint;
-import org.eclipse.jetty.server.HttpChannel;
 import org.eclipse.jetty.server.Response;
 import org.eclipse.jetty.util.BufferUtil;
 
 public class JettyFaultInjector implements FaultInjector {
 
-  private static final byte[] GARBAGE =
-      "lskdu018973t09sylgasjkfg1][]'./.sdlv".getBytes(Charsets.UTF_8);
+  private static final byte[] GARBAGE = "lskdu018973t09sylgasjkfg1][]'./.sdlv".getBytes(UTF_8);
 
-  private final Response response;
+  private final HttpServletResponse response;
   private final Socket socket;
 
-  public JettyFaultInjector(HttpServletResponse response) {
-    this.response = unwrapResponse(response);
-    this.socket = socket();
+  public JettyFaultInjector(HttpServletResponse response, JettyHttpUtils utils) {
+    this.response = response;
+    final Response jettyResponse = utils.unwrapResponse(response);
+    this.socket = utils.socket(jettyResponse);
   }
 
   @Override
@@ -81,11 +77,5 @@ public class JettyFaultInjector implements FaultInjector {
     } catch (IOException e) {
       throwUnchecked(e);
     }
-  }
-
-  private Socket socket() {
-    HttpChannel httpChannel = response.getHttpOutput().getHttpChannel();
-    SelectableChannelEndPoint ep = (SelectableChannelEndPoint) httpChannel.getEndPoint();
-    return ((SocketChannel) ep.getChannel()).socket();
   }
 }

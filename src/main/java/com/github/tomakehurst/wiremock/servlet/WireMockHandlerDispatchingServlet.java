@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2022 Thomas Akehurst
+ * Copyright (C) 2011-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,16 +15,17 @@
  */
 package com.github.tomakehurst.wiremock.servlet;
 
+import static com.github.tomakehurst.wiremock.common.ContentTypes.CONTENT_LENGTH;
 import static com.github.tomakehurst.wiremock.common.Exceptions.throwUnchecked;
+import static com.github.tomakehurst.wiremock.common.ParameterUtils.getFirstNonNull;
 import static com.github.tomakehurst.wiremock.core.Options.ChunkedEncodingPolicy.BODY_FILE;
 import static com.github.tomakehurst.wiremock.core.Options.ChunkedEncodingPolicy.NEVER;
 import static com.github.tomakehurst.wiremock.http.RequestMethod.GET;
 import static com.github.tomakehurst.wiremock.servlet.WireMockHttpServletRequestAdapter.ORIGINAL_REQUEST_KEY;
-import static com.google.common.base.Charsets.UTF_8;
-import static com.google.common.base.MoreObjects.firstNonNull;
-import static com.google.common.net.HttpHeaders.CONTENT_LENGTH;
+import static com.github.tomakehurst.wiremock.stubbing.ServeEvent.ORIGINAL_SERVE_EVENT_KEY;
 import static java.net.HttpURLConnection.HTTP_NOT_FOUND;
 import static java.net.URLDecoder.decode;
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 import com.github.tomakehurst.wiremock.common.LocalNotifier;
@@ -33,14 +34,17 @@ import com.github.tomakehurst.wiremock.core.FaultInjector;
 import com.github.tomakehurst.wiremock.core.Options;
 import com.github.tomakehurst.wiremock.core.WireMockApp;
 import com.github.tomakehurst.wiremock.http.*;
+import com.github.tomakehurst.wiremock.jetty.JettyHttpUtils;
+import com.github.tomakehurst.wiremock.stubbing.ServeEvent;
 import com.github.tomakehurst.wiremock.verification.LoggedRequest;
-import com.google.common.io.ByteStreams;
 import jakarta.servlet.*;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ScheduledExecutorService;
 
 public class WireMockHandlerDispatchingServlet extends HttpServlet {
@@ -63,6 +67,7 @@ public class WireMockHandlerDispatchingServlet extends HttpServlet {
   private MultipartRequestConfigurer multipartRequestConfigurer;
   private Options.ChunkedEncodingPolicy chunkedEncodingPolicy;
   private boolean browserProxyingEnabled;
+  private JettyHttpUtils utils;
 
   @Override
   public void init(ServletConfig config) {
@@ -108,7 +113,9 @@ public class WireMockHandlerDispatchingServlet extends HttpServlet {
 
     browserProxyingEnabled =
         Boolean.parseBoolean(
-            firstNonNull(context.getAttribute("browserProxyingEnabled"), "false").toString());
+            getFirstNonNull(context.getAttribute("browserProxyingEnabled"), "false").toString());
+
+    utils = (JettyHttpUtils) context.getAttribute(JettyHttpUtils.class.getName());
   }
 
   private String getNormalizedMappedUnder(ServletConfig config) {
@@ -124,7 +131,7 @@ public class WireMockHandlerDispatchingServlet extends HttpServlet {
 
   private boolean getFileContextForwardingFlagFrom(ServletConfig config) {
     String flagValue = config.getInitParameter(SHOULD_FORWARD_TO_FILES_CONTEXT);
-    return Boolean.valueOf(flagValue);
+    return Boolean.parseBoolean(flagValue);
   }
 
   @Override
@@ -135,17 +142,27 @@ public class WireMockHandlerDispatchingServlet extends HttpServlet {
 
     // TODO: The HTTP/1.x CONNECT is also forwarded to the servlet now. To keep backward
     // compatible behavior (with proxy involved), skipping the CONNECT handling altogether.
-    if (httpServletRequest.getMethod() == "CONNECT") {
+    if (Objects.equals(httpServletRequest.getMethod(), "CONNECT")) {
       return;
     }
 
     Request request =
         new WireMockHttpServletRequestAdapter(
-            httpServletRequest, multipartRequestConfigurer, mappedUnder, browserProxyingEnabled);
+            httpServletRequest,
+            multipartRequestConfigurer,
+            mappedUnder,
+            browserProxyingEnabled,
+            utils);
 
     ServletHttpResponder responder =
         new ServletHttpResponder(httpServletRequest, httpServletResponse);
-    requestHandler.handle(request, responder);
+
+    final ServeEvent originalServeEvent =
+        httpServletRequest.getAttribute(ORIGINAL_SERVE_EVENT_KEY) != null
+            ? (ServeEvent) httpServletRequest.getAttribute(ORIGINAL_SERVE_EVENT_KEY)
+            : null;
+
+    requestHandler.handle(request, responder, originalServeEvent);
   }
 
   private class ServletHttpResponder implements HttpResponder {
@@ -160,12 +177,14 @@ public class WireMockHandlerDispatchingServlet extends HttpServlet {
     }
 
     @Override
-    public void respond(final Request request, final Response response) {
+    public void respond(
+        final Request request, final Response response, Map<String, Object> attributes) {
       if (Thread.currentThread().isInterrupted()) {
         return;
       }
 
       httpServletRequest.setAttribute(ORIGINAL_REQUEST_KEY, LoggedRequest.createFrom(request));
+      attributes.forEach(httpServletRequest::setAttribute);
 
       if (isAsyncSupported(response, httpServletRequest)) {
         respondAsync(request, response);
@@ -196,14 +215,11 @@ public class WireMockHandlerDispatchingServlet extends HttpServlet {
     private void respondAsync(final Request request, final Response response) {
       final AsyncContext asyncContext = httpServletRequest.startAsync();
       scheduledExecutorService.schedule(
-          new Runnable() {
-            @Override
-            public void run() {
-              try {
-                respondTo(request, response);
-              } finally {
-                asyncContext.complete();
-              }
+          () -> {
+            try {
+              respondTo(request, response);
+            } finally {
+              asyncContext.complete();
             }
           },
           response.getInitialDelay(),
@@ -240,17 +256,8 @@ public class WireMockHandlerDispatchingServlet extends HttpServlet {
     if (response.getStatusMessage() == null) {
       httpServletResponse.setStatus(response.getStatus());
     } else {
-      // The Jetty 11 does not implement HttpServletResponse::setStatus and always sets the
-      // reason as `null`, the workaround using
-      // org.eclipse.jetty.server.Response::setStatusWithReason
-      // still works.
-      if (httpServletResponse instanceof org.eclipse.jetty.server.Response) {
-        final org.eclipse.jetty.server.Response jettyResponse =
-            (org.eclipse.jetty.server.Response) httpServletResponse;
-        jettyResponse.setStatusWithReason(response.getStatus(), response.getStatusMessage());
-      } else {
-        httpServletResponse.setStatus(response.getStatus(), response.getStatusMessage());
-      }
+      utils.setStatusWithReason(
+          response.getStatus(), response.getStatusMessage(), httpServletResponse);
     }
 
     for (HttpHeader header : response.getHeaders().all()) {
@@ -281,7 +288,7 @@ public class WireMockHandlerDispatchingServlet extends HttpServlet {
   private static void writeAndTranslateExceptions(
       HttpServletResponse httpServletResponse, InputStream content) {
     try (ServletOutputStream out = httpServletResponse.getOutputStream()) {
-      ByteStreams.copy(content, out);
+      content.transferTo(out);
       out.flush();
     } catch (IOException e) {
       throwUnchecked(e);
@@ -299,7 +306,7 @@ public class WireMockHandlerDispatchingServlet extends HttpServlet {
       InputStream bodyStream,
       ChunkedDribbleDelay chunkedDribbleDelay) {
     try (ServletOutputStream out = httpServletResponse.getOutputStream()) {
-      byte[] body = ByteStreams.toByteArray(bodyStream);
+      byte[] body = bodyStream.readAllBytes();
 
       if (body.length < 1) {
         notifier.error("Cannot chunk dribble delay when no body set");
@@ -332,7 +339,7 @@ public class WireMockHandlerDispatchingServlet extends HttpServlet {
       throws ServletException, IOException {
     String forwardUrl = wiremockFileSourceRoot + WireMockApp.FILES_ROOT + request.getUrl();
     RequestDispatcher dispatcher =
-        httpServletRequest.getRequestDispatcher(decode(forwardUrl, UTF_8.name()));
+        httpServletRequest.getRequestDispatcher(decode(forwardUrl, UTF_8));
     dispatcher.forward(httpServletRequest, httpServletResponse);
   }
 }
