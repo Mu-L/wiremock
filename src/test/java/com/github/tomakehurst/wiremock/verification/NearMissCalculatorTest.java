@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016-2022 Thomas Akehurst
+ * Copyright (C) 2016-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,24 +16,27 @@
 package com.github.tomakehurst.wiremock.verification;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
-import static com.github.tomakehurst.wiremock.http.RequestMethod.DELETE;
-import static com.github.tomakehurst.wiremock.http.RequestMethod.POST;
-import static com.github.tomakehurst.wiremock.http.RequestMethod.PUT;
+import static com.github.tomakehurst.wiremock.http.RequestMethod.*;
 import static com.github.tomakehurst.wiremock.matching.MockRequest.mockRequest;
 import static com.github.tomakehurst.wiremock.matching.RequestPatternBuilder.newRequestPattern;
+import static com.github.tomakehurst.wiremock.stubbing.ServeEventFactory.newPostMatchServeEvent;
 import static com.github.tomakehurst.wiremock.verification.NearMissCalculator.NEAR_MISS_COUNT;
-import static com.google.common.collect.FluentIterable.from;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.github.tomakehurst.wiremock.client.MappingBuilder;
+import com.github.tomakehurst.wiremock.extension.Parameters;
 import com.github.tomakehurst.wiremock.http.Request;
 import com.github.tomakehurst.wiremock.http.ResponseDefinition;
+import com.github.tomakehurst.wiremock.matching.MatchResult;
+import com.github.tomakehurst.wiremock.matching.RequestMatcherExtension;
 import com.github.tomakehurst.wiremock.stubbing.*;
-import com.google.common.base.Function;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -44,13 +47,22 @@ public class NearMissCalculatorTest {
   StubMappings stubMappings;
   RequestJournal requestJournal;
   Scenarios scenarios;
+  RequestMatcherExtension partialMatchMatcher =
+      new RequestMatcherExtension() {
+        @Override
+        public MatchResult match(Request request, Parameters parameters) {
+          return MatchResult.partialMatch(0.2);
+        }
+      };
 
   @BeforeEach
   public void init() {
     stubMappings = mock(StubMappings.class);
     requestJournal = mock(RequestJournal.class);
     scenarios = new InMemoryScenarios();
-    nearMissCalculator = new NearMissCalculator(stubMappings, requestJournal, scenarios);
+    nearMissCalculator =
+        new NearMissCalculator(
+            stubMappings, requestJournal, scenarios, Map.of("partial", partialMatchMatcher));
   }
 
   @Test
@@ -153,32 +165,33 @@ public class NearMissCalculatorTest {
     assertThat(nearestForIncorrectMethodAndUrl.get(0).getStubMapping().getName(), is("Correct"));
   }
 
+  @Test
+  public void customMatcherIsUsedWhenCalculatingNearestMiss() {
+    givenStubMappings(
+        get(urlEqualTo("/correctpath")).andMatching("partial").willReturn(aResponse()),
+        get(urlEqualTo("/otherpath")).willReturn(aResponse()));
+
+    List<NearMiss> nearest =
+        nearMissCalculator.findNearestTo(
+            mockRequest().method(GET).url("/correctpath").asLoggedRequest());
+
+    assertThat(nearest.size(), is(2));
+    assertThat(nearest.get(0).getStubMapping().getRequest().getUrl(), is("/correctpath"));
+    assertThat(nearest.get(1).getStubMapping().getRequest().getUrl(), is("/otherpath"));
+  }
+
   private void givenStubMappings(final MappingBuilder... mappingBuilders) {
     final List<StubMapping> mappings =
-        from(mappingBuilders)
-            .transform(
-                new Function<MappingBuilder, StubMapping>() {
-                  @Override
-                  public StubMapping apply(MappingBuilder input) {
-                    return input.build();
-                  }
-                })
-            .toList();
+        Arrays.stream(mappingBuilders).map(MappingBuilder::build).collect(Collectors.toList());
+
     when(stubMappings.getAll()).thenReturn(mappings);
   }
 
   private void givenRequests(final Request... requests) {
     final List<ServeEvent> serveEvents =
-        from(requests)
-            .transform(
-                new Function<Request, ServeEvent>() {
-                  @Override
-                  public ServeEvent apply(Request request) {
-                    return ServeEvent.of(
-                        LoggedRequest.createFrom(request), new ResponseDefinition());
-                  }
-                })
-            .toList();
+        Arrays.stream(requests)
+            .map(request -> newPostMatchServeEvent(request, new ResponseDefinition()))
+            .collect(Collectors.toList());
 
     when(requestJournal.getAllServeEvents()).thenReturn(serveEvents);
   }

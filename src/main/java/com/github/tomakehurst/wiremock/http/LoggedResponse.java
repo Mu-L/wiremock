@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016-2022 Thomas Akehurst
+ * Copyright (C) 2016-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,7 +15,8 @@
  */
 package com.github.tomakehurst.wiremock.http;
 
-import static com.google.common.net.MediaType.OCTET_STREAM;
+import static com.github.tomakehurst.wiremock.common.ContentTypes.OCTET_STREAM;
+import static java.nio.charset.StandardCharsets.UTF_8;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -83,13 +84,13 @@ public class LoggedResponse {
   @JsonIgnore
   public String getMimeType() {
     return headers == null || headers.getContentTypeHeader() == null
-        ? OCTET_STREAM.toString()
+        ? OCTET_STREAM
         : headers.getContentTypeHeader().mimeTypePart();
   }
 
   @JsonIgnore
   public Charset getCharset() {
-    return headers == null ? Strings.DEFAULT_CHARSET : headers.getContentTypeHeader().charset();
+    return headers == null ? UTF_8 : headers.getContentTypeHeader().charset();
   }
 
   @JsonIgnore

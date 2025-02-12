@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2022 Thomas Akehurst
+ * Copyright (C) 2011-2023 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,9 +15,6 @@
  */
 package com.github.tomakehurst.wiremock.stubbing;
 
-import static com.google.common.collect.Iterables.removeIf;
-
-import com.google.common.base.Predicate;
 import java.util.Comparator;
 import java.util.Iterator;
 import java.util.concurrent.ConcurrentSkipListSet;
@@ -26,25 +23,22 @@ import java.util.stream.Stream;
 
 public class SortedConcurrentMappingSet implements Iterable<StubMapping> {
 
-  private AtomicLong insertionCount;
-  private ConcurrentSkipListSet<StubMapping> mappingSet;
+  private final AtomicLong insertionCount;
+  private final ConcurrentSkipListSet<StubMapping> mappingSet;
 
   public SortedConcurrentMappingSet() {
     insertionCount = new AtomicLong();
-    mappingSet =
-        new ConcurrentSkipListSet<StubMapping>(sortedByPriorityThenReverseInsertionOrder());
+    mappingSet = new ConcurrentSkipListSet<>(sortedByPriorityThenReverseInsertionOrder());
   }
 
   private Comparator<StubMapping> sortedByPriorityThenReverseInsertionOrder() {
-    return new Comparator<StubMapping>() {
-      public int compare(StubMapping one, StubMapping two) {
-        int priorityComparison = one.comparePriorityWith(two);
-        if (priorityComparison != 0) {
-          return priorityComparison;
-        }
-
-        return Long.compare(two.getInsertionIndex(), one.getInsertionIndex());
+    return (one, two) -> {
+      int priorityComparison = one.comparePriorityWith(two);
+      if (priorityComparison != 0) {
+        return priorityComparison;
       }
+
+      return Long.compare(two.getInsertionIndex(), one.getInsertionIndex());
     };
   }
 
@@ -64,27 +58,16 @@ public class SortedConcurrentMappingSet implements Iterable<StubMapping> {
 
   public boolean remove(final StubMapping mappingToRemove) {
     boolean removedByUuid =
-        removeIf(
-            mappingSet,
-            new Predicate<StubMapping>() {
-              @Override
-              public boolean apply(StubMapping mapping) {
-                return mappingToRemove.getUuid() != null
+        mappingSet.removeIf(
+            mapping ->
+                mappingToRemove.getUuid() != null
                     && mapping.getUuid() != null
-                    && mappingToRemove.getUuid().equals(mapping.getUuid());
-              }
-            });
+                    && mappingToRemove.getUuid().equals(mapping.getUuid()));
 
     boolean removedByRequestPattern =
         !removedByUuid
-            && removeIf(
-                mappingSet,
-                new Predicate<StubMapping>() {
-                  @Override
-                  public boolean apply(StubMapping mapping) {
-                    return mappingToRemove.getRequest().equals(mapping.getRequest());
-                  }
-                });
+            && mappingSet.removeIf(
+                mapping -> mappingToRemove.getRequest().equals(mapping.getRequest()));
 
     return removedByUuid || removedByRequestPattern;
   }

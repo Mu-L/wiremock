@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013-2023 Thomas Akehurst
+ * Copyright (C) 2013-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
  */
 package com.github.tomakehurst.wiremock.admin;
 
+import static com.github.tomakehurst.wiremock.matching.MockRequest.mockRequest;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
 import static org.mockito.Mockito.verify;
@@ -24,28 +25,29 @@ import com.github.tomakehurst.wiremock.common.url.PathParams;
 import com.github.tomakehurst.wiremock.core.Admin;
 import com.github.tomakehurst.wiremock.http.Request;
 import com.github.tomakehurst.wiremock.http.ResponseDefinition;
+import com.github.tomakehurst.wiremock.stubbing.ServeEvent;
 import java.net.HttpURLConnection;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
-public class SaveMappingsTaskTest {
+class SaveMappingsTaskTest {
 
   private Admin mockAdmin = Mockito.mock(Admin.class);
-  private Request mockRequest = Mockito.mock(Request.class);
+  private Request mockRequest = mockRequest();
 
   private SaveMappingsTask saveMappingsTask = new SaveMappingsTask();
 
   @Test
-  public void delegatesSavingMappingsToAdmin() {
-    saveMappingsTask.execute(mockAdmin, mockRequest, PathParams.empty());
+  void delegatesSavingMappingsToAdmin() {
+    saveMappingsTask.execute(mockAdmin, ServeEvent.of(mockRequest), PathParams.empty());
 
     verify(mockAdmin).saveMappings();
   }
 
   @Test
-  public void returnsOkResponse() {
+  void returnsOkResponse() {
     ResponseDefinition response =
-        saveMappingsTask.execute(mockAdmin, mockRequest, PathParams.empty());
+        saveMappingsTask.execute(mockAdmin, ServeEvent.of(mockRequest), PathParams.empty());
 
     assertThat(response.getStatus(), is(HttpURLConnection.HTTP_OK));
     verify(mockAdmin).saveMappings();

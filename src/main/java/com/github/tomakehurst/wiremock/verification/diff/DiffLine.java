@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2021 Thomas Akehurst
+ * Copyright (C) 2017-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,9 +15,13 @@
  */
 package com.github.tomakehurst.wiremock.verification.diff;
 
+import static com.github.tomakehurst.wiremock.common.Strings.isEmpty;
+
+import com.github.tomakehurst.wiremock.matching.MatchResult;
+import com.github.tomakehurst.wiremock.matching.MatchResult.DiffDescription;
 import com.github.tomakehurst.wiremock.matching.NamedValueMatcher;
 import com.github.tomakehurst.wiremock.matching.UrlPattern;
-import org.apache.commons.lang3.StringUtils;
+import java.util.List;
 
 class DiffLine<V> {
 
@@ -55,15 +59,15 @@ class DiffLine<V> {
   }
 
   public String getMessage() {
-    String message = null;
-    if (value == null || StringUtils.isEmpty(value.toString())) {
+    String message;
+    if (value == null || isEmpty(value.toString())) {
       message = requestAttribute + " is not present";
     } else {
       message = isExactMatch() ? null : requestAttribute + " does not match";
     }
 
     if (isUrlRegexPattern() && !anyQuestionsMarksAreEscaped(pattern.getExpected())) {
-      message += ". When using a regex, \"?\" should be \"\\\\?\"";
+      message += ". When using a regex, \"?\" should be \"\\?\"";
     }
 
     if (pattern instanceof UrlPattern
@@ -85,11 +89,25 @@ class DiffLine<V> {
       return false;
     }
 
-    String sub = s.substring(index - 2, index);
-    return sub.equals("\\\\");
+    String sub = s.substring(index - 1, index);
+    return sub.equals("\\");
   }
 
   private boolean isUrlRegexPattern() {
     return pattern instanceof UrlPattern && ((UrlPattern) pattern).isRegex();
+  }
+
+  public List<DiffDescription> getDiffDescriptions() {
+    List<DiffDescription> diffDescriptions = getMatchResult().getDiffDescriptions();
+    if (diffDescriptions.isEmpty()) {
+      return List.of(
+          new DiffDescription(
+              this.getPrintedPatternValue(), this.getActual().toString(), this.getMessage()));
+    }
+    return diffDescriptions;
+  }
+
+  public MatchResult getMatchResult() {
+    return pattern.match(value);
   }
 }

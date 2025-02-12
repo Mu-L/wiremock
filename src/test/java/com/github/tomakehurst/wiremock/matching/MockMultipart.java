@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021 Thomas Akehurst
+ * Copyright (C) 2018-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,19 +15,19 @@
  */
 package com.github.tomakehurst.wiremock.matching;
 
-import static com.google.common.collect.Lists.newArrayList;
-
 import com.github.tomakehurst.wiremock.http.Body;
 import com.github.tomakehurst.wiremock.http.HttpHeader;
 import com.github.tomakehurst.wiremock.http.HttpHeaders;
 import com.github.tomakehurst.wiremock.http.Request;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
 public class MockMultipart implements Request.Part {
 
   private String name;
-  private List<HttpHeader> headers = newArrayList();
+  private String filename;
+  private List<HttpHeader> headers = new ArrayList<>();
   private Body body;
 
   public static MockMultipart mockPart() {
@@ -36,6 +36,11 @@ public class MockMultipart implements Request.Part {
 
   public MockMultipart name(String name) {
     this.name = name;
+    return this;
+  }
+
+  public MockMultipart filename(String filename) {
+    this.filename = filename;
     return this;
   }
 
@@ -65,6 +70,11 @@ public class MockMultipart implements Request.Part {
   }
 
   @Override
+  public String getFileName() {
+    return filename;
+  }
+
+  @Override
   public HttpHeader getHeader(String key) {
     return getHeaders().getHeader(key);
   }
@@ -85,19 +95,21 @@ public class MockMultipart implements Request.Part {
     if (o == null || getClass() != o.getClass()) return false;
     MockMultipart that = (MockMultipart) o;
     return Objects.equals(name, that.name)
+        && Objects.equals(filename, that.filename)
         && Objects.equals(headers, that.headers)
         && Objects.equals(body, that.body);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash(name, headers, body);
+    return Objects.hash(name, filename, headers, body);
   }
 
   @Override
   public String toString() {
     final StringBuilder sb = new StringBuilder("MockMultipart{");
     sb.append("name='").append(name).append('\'');
+    sb.append("filename='").append(filename).append('\'');
     sb.append(", headers=").append(headers);
     sb.append(", body=").append(body);
     sb.append('}');

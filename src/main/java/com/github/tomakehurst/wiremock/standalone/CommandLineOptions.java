@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2022 Thomas Akehurst
+ * Copyright (C) 2011-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,22 +19,25 @@ import static com.github.tomakehurst.wiremock.common.BrowserProxySettings.DEFAUL
 import static com.github.tomakehurst.wiremock.common.BrowserProxySettings.DEFAULT_CA_KEYSTORE_PATH;
 import static com.github.tomakehurst.wiremock.common.Exceptions.throwUnchecked;
 import static com.github.tomakehurst.wiremock.common.ProxySettings.NO_PROXY;
+import static com.github.tomakehurst.wiremock.common.ResourceUtil.getResource;
 import static com.github.tomakehurst.wiremock.core.WireMockApp.MAPPINGS_ROOT;
-import static com.github.tomakehurst.wiremock.extension.ExtensionLoader.valueAssignableFrom;
 import static com.github.tomakehurst.wiremock.http.CaseInsensitiveKey.TO_CASE_INSENSITIVE_KEYS;
 
 import com.github.tomakehurst.wiremock.common.*;
+import com.github.tomakehurst.wiremock.common.filemaker.FilenameMaker;
 import com.github.tomakehurst.wiremock.common.ssl.KeyStoreSettings;
 import com.github.tomakehurst.wiremock.common.ssl.KeyStoreSourceFactory;
 import com.github.tomakehurst.wiremock.core.MappingsSaver;
 import com.github.tomakehurst.wiremock.core.Options;
+import com.github.tomakehurst.wiremock.core.Version;
 import com.github.tomakehurst.wiremock.core.WireMockApp;
-import com.github.tomakehurst.wiremock.extension.Extension;
-import com.github.tomakehurst.wiremock.extension.ExtensionLoader;
-import com.github.tomakehurst.wiremock.extension.responsetemplating.ResponseTemplateTransformer;
+import com.github.tomakehurst.wiremock.extension.ExtensionDeclarations;
+import com.github.tomakehurst.wiremock.global.GlobalSettings;
 import com.github.tomakehurst.wiremock.http.CaseInsensitiveKey;
 import com.github.tomakehurst.wiremock.http.HttpServerFactory;
 import com.github.tomakehurst.wiremock.http.ThreadPoolFactory;
+import com.github.tomakehurst.wiremock.http.client.ApacheHttpClientFactory;
+import com.github.tomakehurst.wiremock.http.client.HttpClientFactory;
 import com.github.tomakehurst.wiremock.http.trafficlistener.ConsoleNotifyingWiremockNetworkTrafficListener;
 import com.github.tomakehurst.wiremock.http.trafficlistener.DoNothingWiremockNetworkTrafficListener;
 import com.github.tomakehurst.wiremock.http.trafficlistener.WiremockNetworkTrafficListener;
@@ -44,32 +47,31 @@ import com.github.tomakehurst.wiremock.security.BasicAuthenticator;
 import com.github.tomakehurst.wiremock.security.NoAuthenticator;
 import com.github.tomakehurst.wiremock.store.DefaultStores;
 import com.github.tomakehurst.wiremock.store.Stores;
-import com.github.tomakehurst.wiremock.verification.notmatched.NotMatchedRenderer;
-import com.github.tomakehurst.wiremock.verification.notmatched.PlainTextStubNotMatchedRenderer;
-import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Joiner;
-import com.google.common.base.Optional;
-import com.google.common.base.Strings;
-import com.google.common.collect.*;
-import com.google.common.io.Resources;
 import java.io.IOException;
 import java.io.StringWriter;
 import java.net.URI;
 import java.util.*;
+import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 import joptsimple.OptionParser;
 import joptsimple.OptionSet;
 
 public class CommandLineOptions implements Options {
 
   private static final String HELP = "help";
+  private static final String VERSION = "version";
   private static final String RECORD_MAPPINGS = "record-mappings";
   private static final String MATCH_HEADERS = "match-headers";
   private static final String PROXY_ALL = "proxy-all";
   private static final String PRESERVE_HOST_HEADER = "preserve-host-header";
+  private static final String PRESERVE_USER_AGENT_PROXY_HEADER = "preserve-user-agent-proxy-header";
   private static final String PROXY_VIA = "proxy-via";
   private static final String TIMEOUT = "timeout";
   private static final String PORT = "port";
   private static final String DISABLE_HTTP = "disable-http";
+  private static final String DISABLE_HTTP2_PLAIN = "disable-http2-plain";
+  private static final String DISABLE_HTTP2_TLS = "disable-http2-tls";
   private static final String BIND_ADDRESS = "bind-address";
   private static final String HTTPS_PORT = "https-port";
   private static final String HTTPS_KEYSTORE = "https-keystore";
@@ -85,6 +87,7 @@ public class CommandLineOptions implements Options {
   private static final String DISABLE_BANNER = "disable-banner";
   private static final String DISABLE_REQUEST_JOURNAL = "no-request-journal";
   private static final String EXTENSIONS = "extensions";
+  private static final String DISABLE_EXTENSION_SCANNING = "disable-extensions-scanning";
   private static final String MAX_ENTRIES_REQUEST_JOURNAL = "max-request-journal-entries";
   private static final String JETTY_ACCEPTOR_THREAD_COUNT = "jetty-acceptor-threads";
   private static final String PRINT_ALL_NETWORK_TRAFFIC = "print-all-network-traffic";
@@ -98,6 +101,8 @@ public class CommandLineOptions implements Options {
   private static final String CONTAINER_THREADS = "container-threads";
   private static final String GLOBAL_RESPONSE_TEMPLATING = "global-response-templating";
   private static final String LOCAL_RESPONSE_TEMPLATING = "local-response-templating";
+  private static final String DISABLE_RESPONSE_TEMPLATING = "disable-response-templating";
+  public static final String FILENAME_TEMPLATE = "filename-template";
   private static final String ADMIN_API_BASIC_AUTH = "admin-api-basic-auth";
   private static final String ADMIN_API_REQUIRE_HTTPS = "admin-api-require-https";
   private static final String ASYNCHRONOUS_RESPONSE_ENABLED = "async-response-enabled";
@@ -120,6 +125,11 @@ public class CommandLineOptions implements Options {
   private static final String LOGGED_RESPONSE_BODY_SIZE_LIMIT = "logged-response-body-size-limit";
   private static final String ALLOW_PROXY_TARGETS = "allow-proxy-targets";
   private static final String DENY_PROXY_TARGETS = "deny-proxy-targets";
+  private static final String PROXY_TIMEOUT = "proxy-timeout";
+  private static final String MAX_HTTP_CLIENT_CONNECTIONS = "max-http-client-connections";
+  private static final String DISABLE_CONNECTION_REUSE = "disable-connection-reuse";
+  private static final String PROXY_PASS_THROUGH = "proxy-pass-through";
+  private static final String SUPPORTED_PROXY_ENCODINGS = "supported-proxy-encodings";
 
   private final OptionSet optionSet;
 
@@ -127,7 +137,8 @@ public class CommandLineOptions implements Options {
   private final FileSource fileSource;
 
   private final MappingsSource mappingsSource;
-  private final Map<String, Extension> extensions;
+  private final ExtensionDeclarations extensions;
+  private final FilenameMaker filenameMaker;
 
   private String helpText;
   private Integer actualHttpPort;
@@ -141,6 +152,8 @@ public class CommandLineOptions implements Options {
             "The port number for the server to listen on (default: 8080). 0 for dynamic port selection.")
         .withRequiredArg();
     optionParser.accepts(DISABLE_HTTP, "Disable the default HTTP listener.");
+    optionParser.accepts(DISABLE_HTTP2_PLAIN, "Disable HTTP/2 on plain text (HTTP) connections.");
+    optionParser.accepts(DISABLE_HTTP2_TLS, "Disable HTTP/2 on TLS (HTTPS) connections.");
     optionParser
         .accepts(
             HTTPS_PORT,
@@ -193,13 +206,16 @@ public class CommandLineOptions implements Options {
             "Path to an alternative keystore for HTTPS. Password is assumed to be \"password\" if not specified.")
         .requiredIf(HTTPS_KEYSTORE_PASSWORD)
         .withRequiredArg()
-        .defaultsTo(Resources.getResource("keystore").toString());
+        .defaultsTo(getResource(CommandLineOptions.class, "keystore").toString());
     optionParser
         .accepts(PROXY_ALL, "Will create a proxy mapping for /* to the specified URL")
         .withRequiredArg();
     optionParser.accepts(
         PRESERVE_HOST_HEADER,
         "Will transfer the original host header from the client to the proxied service");
+    optionParser.accepts(
+        PRESERVE_USER_AGENT_PROXY_HEADER,
+        "Will transfer the original User-Agent header from the client to the proxied service");
     optionParser
         .accepts(PROXY_VIA, "Specifies a proxy server to use when routing proxy mapped requests")
         .withRequiredArg();
@@ -230,6 +246,9 @@ public class CommandLineOptions implements Options {
             EXTENSIONS,
             "Matching and/or response transformer extension class names, comma separated.")
         .withRequiredArg();
+    optionParser.accepts(
+        DISABLE_EXTENSION_SCANNING,
+        "Prevent extensions from being scanned and loaded from the classpath");
     optionParser
         .accepts(
             MAX_ENTRIES_REQUEST_JOURNAL,
@@ -262,8 +281,11 @@ public class CommandLineOptions implements Options {
         "Print all raw incoming and outgoing network traffic to console");
     optionParser.accepts(
         GLOBAL_RESPONSE_TEMPLATING, "Preprocess all responses with Handlebars templates");
+    optionParser.accepts(FILENAME_TEMPLATE, "Add filename template").withRequiredArg();
     optionParser.accepts(
         LOCAL_RESPONSE_TEMPLATING, "Preprocess selected responses with Handlebars templates");
+    optionParser.accepts(
+        DISABLE_RESPONSE_TEMPLATING, "Disable processing of responses with Handlebars templates");
     optionParser
         .accepts(
             ADMIN_API_BASIC_AUTH,
@@ -354,14 +376,37 @@ public class CommandLineOptions implements Options {
     optionParser
         .accepts(
             DENY_PROXY_TARGETS,
-            "Comma separated list of IP addresses, IP ranges (hyphenated) and domain name wildcards that cannot be proxied to/recorded from. Is evaluated after the list of allowed addresses.")
+            "Comma-separated list of IP addresses, IP ranges (hyphenated) and domain name wildcards that cannot be proxied to/recorded from. Is evaluated after the list of allowed addresses.")
         .withRequiredArg();
+    optionParser
+        .accepts(PROXY_TIMEOUT, "Timeout in milliseconds for requests to proxy")
+        .withRequiredArg();
+    optionParser
+        .accepts(PROXY_PASS_THROUGH, "Flag to control browser proxy pass through")
+        .withRequiredArg();
+    optionParser
+        .accepts(MAX_HTTP_CLIENT_CONNECTIONS, "Maximum connections for Http Client")
+        .withRequiredArg();
+    optionParser
+        .accepts(DISABLE_CONNECTION_REUSE, "Disable http connection reuse")
+        .withRequiredArg();
+    optionParser
+        .accepts(
+            SUPPORTED_PROXY_ENCODINGS,
+            "Comma-separated list of supported accept-encoding values for use when proxying and recording")
+        .withRequiredArg()
+        .ofType(String.class)
+        .withValuesSeparatedBy(",");
+
+    optionParser.accepts(VERSION, "Prints wiremock version information and exits");
 
     optionParser.accepts(HELP, "Print this message").forHelp();
 
     optionSet = optionParser.parse(args);
     validate();
     captureHelpTextIfRequested(optionParser);
+
+    extensions = new ExtensionDeclarations();
 
     if (optionSet.has(LOAD_RESOURCES_FROM_CLASSPATH)) {
       fileSource =
@@ -372,37 +417,52 @@ public class CommandLineOptions implements Options {
 
     stores = new DefaultStores(fileSource);
 
-    mappingsSource = new JsonFileMappingsSource(fileSource.child(MAPPINGS_ROOT));
-    extensions = buildExtensions();
+    if (optionSet.has(PROXY_PASS_THROUGH)) {
+      GlobalSettings newSettings =
+          stores
+              .getSettingsStore()
+              .get()
+              .copy()
+              .proxyPassThrough(
+                  Boolean.parseBoolean((String) optionSet.valueOf(PROXY_PASS_THROUGH)))
+              .build();
+      stores.getSettingsStore().set(newSettings);
+    }
+
+    filenameMaker = new FilenameMaker(getFilenameTemplateOption());
+    mappingsSource = new JsonFileMappingsSource(fileSource.child(MAPPINGS_ROOT), filenameMaker);
+    buildExtensions();
 
     actualHttpPort = null;
   }
 
-  private Map<String, Extension> buildExtensions() {
-    ImmutableMap.Builder<String, Extension> builder = ImmutableMap.builder();
+  private void buildExtensions() {
     if (optionSet.has(EXTENSIONS)) {
-      String classNames = (String) optionSet.valueOf(EXTENSIONS);
-      builder.putAll(ExtensionLoader.load(classNames.split(",")));
+      String classNamesParamValue = (String) optionSet.valueOf(EXTENSIONS);
+      final String[] classNames = classNamesParamValue.split(",");
+      extensions.add(classNames);
     }
-
-    if (optionSet.has(GLOBAL_RESPONSE_TEMPLATING)) {
-      contributeResponseTemplateTransformer(builder, true);
-    } else if (optionSet.has(LOCAL_RESPONSE_TEMPLATING)) {
-      contributeResponseTemplateTransformer(builder, false);
-    }
-
-    return builder.build();
   }
 
-  private void contributeResponseTemplateTransformer(
-      ImmutableMap.Builder<String, Extension> builder, boolean global) {
-    ResponseTemplateTransformer transformer =
-        ResponseTemplateTransformer.builder()
-            .global(global)
-            .maxCacheEntries(getMaxTemplateCacheEntries())
-            .permittedSystemKeys(getPermittedSystemKeys())
-            .build();
-    builder.put(transformer.getName(), transformer);
+  private String getFilenameTemplateOption() {
+    if (optionSet.has(FILENAME_TEMPLATE)) {
+      String filenameTemplate = (String) optionSet.valueOf(FILENAME_TEMPLATE);
+      validateFilenameTemplate(filenameTemplate);
+      return filenameTemplate;
+    }
+
+    return null;
+  }
+
+  private void validateFilenameTemplate(String filenameTemplate) {
+    String[] templateParts = filenameTemplate.split("-");
+    boolean handlebarIdentifierMissed =
+        Arrays.stream(templateParts)
+            .anyMatch(part -> !part.contains("{{{") || !part.contains("}}}"));
+    if (handlebarIdentifierMissed) {
+      throw new IllegalArgumentException(
+          "Format for filename template should be contain handlebar value. Please check format one more time");
+    }
   }
 
   private void validate() {
@@ -444,8 +504,10 @@ public class CommandLineOptions implements Options {
   public List<CaseInsensitiveKey> matchingHeaders() {
     if (optionSet.hasArgument(MATCH_HEADERS)) {
       String headerSpec = (String) optionSet.valueOf(MATCH_HEADERS);
-      UnmodifiableIterator<String> headerKeys = Iterators.forArray(headerSpec.split(","));
-      return ImmutableList.copyOf(Iterators.transform(headerKeys, TO_CASE_INSENSITIVE_KEYS));
+
+      return Arrays.stream(headerSpec.split(","))
+          .map(TO_CASE_INSENSITIVE_KEYS)
+          .collect(Collectors.toUnmodifiableList());
     }
 
     return Collections.emptyList();
@@ -461,6 +523,16 @@ public class CommandLineOptions implements Options {
     } catch (Exception e) {
       return throwUnchecked(e, null);
     }
+  }
+
+  @Override
+  public boolean hasDefaultHttpServerFactory() {
+    return true;
+  }
+
+  @Override
+  public HttpClientFactory httpClientFactory() {
+    return new ApacheHttpClientFactory();
   }
 
   @Override
@@ -486,6 +558,16 @@ public class CommandLineOptions implements Options {
     return optionSet.has(DISABLE_HTTP);
   }
 
+  @Override
+  public boolean getHttp2PlainDisabled() {
+    return optionSet.has(DISABLE_HTTP2_PLAIN);
+  }
+
+  @Override
+  public boolean getHttp2TlsDisabled() {
+    return optionSet.has(DISABLE_HTTP2_TLS);
+  }
+
   public void setActualHttpPort(int port) {
     actualHttpPort = port;
   }
@@ -501,6 +583,11 @@ public class CommandLineOptions implements Options {
     }
 
     return DEFAULT_BIND_ADDRESS;
+  }
+
+  @Override
+  public FilenameMaker getFilenameMaker() {
+    return filenameMaker;
   }
 
   @Override
@@ -573,6 +660,10 @@ public class CommandLineOptions implements Options {
         : -1;
   }
 
+  public boolean version() {
+    return optionSet.has(VERSION);
+  }
+
   public boolean help() {
     return optionSet.has(HELP);
   }
@@ -595,6 +686,11 @@ public class CommandLineOptions implements Options {
   }
 
   @Override
+  public boolean shouldPreserveUserAgentProxyHeader() {
+    return optionSet.has(PRESERVE_USER_AGENT_PROXY_HEADER);
+  }
+
+  @Override
   public String proxyHostHeader() {
     return optionSet.hasArgument(PROXY_ALL)
         ? URI.create((String) optionSet.valueOf(PROXY_ALL)).getAuthority()
@@ -602,9 +698,13 @@ public class CommandLineOptions implements Options {
   }
 
   @Override
-  @SuppressWarnings("unchecked")
-  public <T extends Extension> Map<String, T> extensionsOfType(final Class<T> extensionType) {
-    return (Map<String, T>) Maps.filterEntries(extensions, valueAssignableFrom(extensionType));
+  public ExtensionDeclarations getDeclaredExtensions() {
+    return extensions;
+  }
+
+  @Override
+  public boolean isExtensionScanningEnabled() {
+    return !optionSet.has(DISABLE_EXTENSION_SCANNING);
   }
 
   @Override
@@ -636,12 +736,9 @@ public class CommandLineOptions implements Options {
     return optionSet.has(ADMIN_API_REQUIRE_HTTPS);
   }
 
-  @Override
-  public NotMatchedRenderer getNotMatchedRenderer() {
-    return new PlainTextStubNotMatchedRenderer();
-  }
-
-  /** @deprecated use {@link BrowserProxySettings#enabled()} */
+  /**
+   * @deprecated use {@link BrowserProxySettings#enabled()}
+   */
   @Deprecated
   @Override
   public boolean browserProxyingEnabled() {
@@ -700,7 +797,7 @@ public class CommandLineOptions implements Options {
     if (specifiesMaxRequestJournalEntries()) {
       return Optional.of(Integer.parseInt((String) optionSet.valueOf(MAX_ENTRIES_REQUEST_JOURNAL)));
     }
-    return Optional.absent();
+    return Optional.empty();
   }
 
   @Override
@@ -714,79 +811,81 @@ public class CommandLineOptions implements Options {
 
   @Override
   public String toString() {
-    ImmutableMap.Builder<String, Object> builder = ImmutableMap.builder();
+    Map<String, Object> map = new LinkedHashMap<>();
+
+    map.put(VERSION, Version.getCurrentVersion());
 
     if (actualHttpPort != null) {
-      builder.put(PORT, actualHttpPort);
+      map.put(PORT, actualHttpPort);
     }
 
     if (actualHttpsPort != null) {
-      builder.put(HTTPS_PORT, actualHttpsPort);
+      map.put(HTTPS_PORT, actualHttpsPort);
     }
 
     if (httpsSettings().enabled()) {
-      builder.put(HTTPS_KEYSTORE, nullToString(httpsSettings().keyStorePath()));
+      map.put(HTTPS_KEYSTORE, nullToString(httpsSettings().keyStorePath()));
     }
 
-    if (!(proxyVia() == NO_PROXY)) {
-      builder.put(PROXY_VIA, proxyVia());
+    if (proxyVia() != NO_PROXY) {
+      map.put(PROXY_VIA, proxyVia());
     }
     if (proxyUrl() != null) {
-      builder
-          .put(PROXY_ALL, nullToString(proxyUrl()))
-          .put(PRESERVE_HOST_HEADER, shouldPreserveHostHeader());
+      map.put(PROXY_ALL, nullToString(proxyUrl()));
+      map.put(PRESERVE_HOST_HEADER, shouldPreserveHostHeader());
+      map.put(PRESERVE_USER_AGENT_PROXY_HEADER, shouldPreserveUserAgentProxyHeader());
     }
 
     BrowserProxySettings browserProxySettings = browserProxySettings();
 
-    builder.put(ENABLE_BROWSER_PROXYING, browserProxySettings.enabled());
+    map.put(ENABLE_BROWSER_PROXYING, browserProxySettings.enabled());
     if (browserProxySettings.enabled()) {
       KeyStoreSettings keyStoreSettings = browserProxySettings.caKeyStore();
-      builder.put(TRUST_ALL_PROXY_TARGETS, browserProxySettings.trustAllProxyTargets());
+      map.put(TRUST_ALL_PROXY_TARGETS, browserProxySettings.trustAllProxyTargets());
       List<String> trustedProxyTargets = browserProxySettings.trustedProxyTargets();
       if (!trustedProxyTargets.isEmpty()) {
-        builder.put(TRUST_PROXY_TARGET, Joiner.on(", ").join(trustedProxyTargets));
+        map.put(TRUST_PROXY_TARGET, String.join(", ", trustedProxyTargets));
       }
-      builder.put(HTTPS_CA_KEYSTORE, keyStoreSettings.path());
-      builder.put(HTTPS_CA_KEYSTORE_TYPE, keyStoreSettings.type());
+      map.put(HTTPS_CA_KEYSTORE, keyStoreSettings.path());
+      map.put(HTTPS_CA_KEYSTORE_TYPE, keyStoreSettings.type());
     }
 
-    builder.put(DISABLE_BANNER, bannerDisabled());
+    map.put(DISABLE_BANNER, bannerDisabled());
 
     if (recordMappingsEnabled()) {
-      builder.put(RECORD_MAPPINGS, recordMappingsEnabled()).put(MATCH_HEADERS, matchingHeaders());
+      map.put(RECORD_MAPPINGS, recordMappingsEnabled());
+      map.put(MATCH_HEADERS, matchingHeaders());
     }
 
-    builder
-        .put(DISABLE_REQUEST_JOURNAL, requestJournalDisabled())
-        .put(VERBOSE, verboseLoggingEnabled());
+    map.put(DISABLE_REQUEST_JOURNAL, requestJournalDisabled());
+    map.put(VERBOSE, verboseLoggingEnabled());
 
     if (jettySettings().getAcceptQueueSize().isPresent()) {
-      builder.put(JETTY_ACCEPT_QUEUE_SIZE, jettySettings().getAcceptQueueSize().get());
+      map.put(JETTY_ACCEPT_QUEUE_SIZE, jettySettings().getAcceptQueueSize().get());
     }
 
     if (jettySettings().getAcceptors().isPresent()) {
-      builder.put(JETTY_ACCEPTOR_THREAD_COUNT, jettySettings().getAcceptors().get());
+      map.put(JETTY_ACCEPTOR_THREAD_COUNT, jettySettings().getAcceptors().get());
     }
 
     if (jettySettings().getRequestHeaderSize().isPresent()) {
-      builder.put(JETTY_HEADER_BUFFER_SIZE, jettySettings().getRequestHeaderSize().get());
+      map.put(JETTY_HEADER_BUFFER_SIZE, jettySettings().getRequestHeaderSize().get());
     }
 
     if (!(getAdminAuthenticator() instanceof NoAuthenticator)) {
-      builder.put(ADMIN_API_BASIC_AUTH, "enabled");
+      map.put(ADMIN_API_BASIC_AUTH, "enabled");
     }
 
     if (getHttpsRequiredForAdminApi()) {
-      builder.put(ADMIN_API_REQUIRE_HTTPS, "true");
+      map.put(ADMIN_API_REQUIRE_HTTPS, "true");
     }
 
     StringBuilder sb = new StringBuilder();
-    for (Map.Entry<String, Object> param : builder.build().entrySet()) {
+    for (Map.Entry<String, Object> param : map.entrySet()) {
       int paddingLength = 29 - param.getKey().length();
       sb.append(param.getKey())
           .append(":")
-          .append(Strings.repeat(" ", paddingLength))
+          .append(" ".repeat(Math.max(0, paddingLength)))
           .append(nullToString(param.getValue()))
           .append("\n");
     }
@@ -859,7 +958,7 @@ public class CommandLineOptions implements Options {
 
   @Override
   public NetworkAddressRules getProxyTargetRules() {
-    NetworkAddressRules.Builder builder = NetworkAddressRules.builder();
+    DefaultNetworkAddressRules.Builder builder = NetworkAddressRules.builder();
     if (optionSet.has(ALLOW_PROXY_TARGETS)) {
       Arrays.stream(((String) optionSet.valueOf(ALLOW_PROXY_TARGETS)).split(","))
           .forEach(builder::allow);
@@ -891,27 +990,71 @@ public class CommandLineOptions implements Options {
         .build();
   }
 
-  private Long getMaxTemplateCacheEntries() {
+  @Override
+  public int proxyTimeout() {
+    return optionSet.has(PROXY_TIMEOUT)
+        ? Integer.parseInt((String) optionSet.valueOf(PROXY_TIMEOUT))
+        : DEFAULT_TIMEOUT;
+  }
+
+  @Override
+  public int getMaxHttpClientConnections() {
+    return optionSet.has(MAX_HTTP_CLIENT_CONNECTIONS)
+        ? Integer.parseInt((String) optionSet.valueOf(MAX_HTTP_CLIENT_CONNECTIONS))
+        : DEFAULT_MAX_HTTP_CONNECTIONS;
+  }
+
+  @Override
+  public boolean getResponseTemplatingEnabled() {
+    return !optionSet.has(DISABLE_RESPONSE_TEMPLATING);
+  }
+
+  @Override
+  public boolean getResponseTemplatingGlobal() {
+    return optionSet.has(GLOBAL_RESPONSE_TEMPLATING);
+  }
+
+  @Override
+  public Long getMaxTemplateCacheEntries() {
     return optionSet.has(MAX_TEMPLATE_CACHE_ENTRIES)
-        ? Long.valueOf(optionSet.valueOf(MAX_TEMPLATE_CACHE_ENTRIES).toString())
-        : null;
+        ? Long.parseLong(optionSet.valueOf(MAX_TEMPLATE_CACHE_ENTRIES).toString())
+        : DEFAULT_MAX_TEMPLATE_CACHE_ENTRIES;
   }
 
   @SuppressWarnings("unchecked")
-  @VisibleForTesting
-  public Set<String> getPermittedSystemKeys() {
+  @Override
+  public Set<String> getTemplatePermittedSystemKeys() {
     return optionSet.has(PERMITTED_SYSTEM_KEYS)
-        ? ImmutableSet.copyOf((List<String>) optionSet.valuesOf(PERMITTED_SYSTEM_KEYS))
-        : Collections.<String>emptySet();
+        ? Set.copyOf((List<String>) optionSet.valuesOf(PERMITTED_SYSTEM_KEYS))
+        : Collections.emptySet();
+  }
+
+  @Override
+  public boolean getTemplateEscapingDisabled() {
+    return true;
+  }
+
+  @SuppressWarnings("unchecked")
+  @Override
+  public Set<String> getSupportedProxyEncodings() {
+    return optionSet.has(SUPPORTED_PROXY_ENCODINGS)
+        ? Set.copyOf((List<String>) optionSet.valuesOf(SUPPORTED_PROXY_ENCODINGS))
+        : null;
   }
 
   private boolean isAsynchronousResponseEnabled() {
     return optionSet.has(ASYNCHRONOUS_RESPONSE_ENABLED)
-        ? Boolean.valueOf((String) optionSet.valueOf(ASYNCHRONOUS_RESPONSE_ENABLED))
-        : false;
+        && Boolean.parseBoolean((String) optionSet.valueOf(ASYNCHRONOUS_RESPONSE_ENABLED));
   }
 
   private int getAsynchronousResponseThreads() {
-    return Integer.valueOf((String) optionSet.valueOf(ASYNCHRONOUS_RESPONSE_THREADS));
+    return Integer.parseInt((String) optionSet.valueOf(ASYNCHRONOUS_RESPONSE_THREADS));
+  }
+
+  @Override
+  public boolean getDisableConnectionReuse() {
+    return optionSet.has(DISABLE_CONNECTION_REUSE)
+        ? Boolean.parseBoolean((String) optionSet.valueOf(DISABLE_CONNECTION_REUSE))
+        : DEFAULT_DISABLE_CONNECTION_REUSE;
   }
 }

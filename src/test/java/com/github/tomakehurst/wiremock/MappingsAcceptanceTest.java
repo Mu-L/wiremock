@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2021 Thomas Akehurst
+ * Copyright (C) 2011-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -65,6 +65,46 @@ public class MappingsAcceptanceTest extends AcceptanceTestBase {
     assertThat(response.statusCode(), is(401));
     assertThat(response.content(), is("Not allowed!"));
     assertThat(response.firstHeader("Content-Type"), is("text/plain"));
+  }
+
+  @Test
+  public void basicMappingWithNoTrailingZerosMatchingOnDecimalsWithNoTrailingZeros() {
+    testClient.addResponse(MappingJsonSamples.MAPPING_REQUEST_JSON_BODY_DECIMALS_NO_TRAILING_ZEROS);
+
+    WireMockResponse noTrailingZerosResponse =
+        testClient.postJson("/body/decimals", "{\"float\": 1.2}");
+
+    assertThat(noTrailingZerosResponse.statusCode(), is(200));
+  }
+
+  @Test
+  public void basicMappingWithNoTrailingZerosMatchingOnDecimalsWithTrailingZeros() {
+    testClient.addResponse(MappingJsonSamples.MAPPING_REQUEST_JSON_BODY_DECIMALS_NO_TRAILING_ZEROS);
+
+    WireMockResponse trailingZerosResponse =
+        testClient.postJson("/body/decimals", "{\"float\": 1.2000000}");
+
+    assertThat(trailingZerosResponse.statusCode(), is(200));
+  }
+
+  @Test
+  public void basicMappingWithTrailingZerosMatchingOnDecimalsWithNoTrailingZeros() {
+    testClient.addResponse(MappingJsonSamples.MAPPING_REQUEST_JSON_BODY_DECIMALS_TRAILING_ZEROS);
+
+    WireMockResponse noTrailingZerosResponse =
+        testClient.postJson("/body/decimals", "{\"float\": 1.2}");
+
+    assertThat(noTrailingZerosResponse.statusCode(), is(200));
+  }
+
+  @Test
+  public void basicMappingWithTrailingZerosMatchingOnDecimalsWithTrailingZeros() {
+    testClient.addResponse(MappingJsonSamples.MAPPING_REQUEST_JSON_BODY_DECIMALS_TRAILING_ZEROS);
+
+    WireMockResponse trailingZerosResponse =
+        testClient.postJson("/body/decimals", "{\"float\": 1.200}");
+
+    assertThat(trailingZerosResponse.statusCode(), is(200));
   }
 
   @Test
@@ -149,7 +189,8 @@ public class MappingsAcceptanceTest extends AcceptanceTestBase {
     assertThat(response.statusCode(), is(200));
     assertThat(
         response.content(),
-        is("{\"bignumber\":1234567890.12,\"array\":[1,2,3],\"key\":\"value\"}"));
+        is(
+            "{\"bignumber\":1234567890.12,\"integer_as_float\":2.0,\"array\":[1,2,3],\"integer\":2,\"key\":\"value\"}"));
   }
 
   @Test

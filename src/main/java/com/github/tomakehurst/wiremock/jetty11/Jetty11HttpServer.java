@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 Thomas Akehurst
+ * Copyright (C) 2019-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,23 +15,54 @@
  */
 package com.github.tomakehurst.wiremock.jetty11;
 
+import static com.github.tomakehurst.wiremock.common.Exceptions.throwUnchecked;
+import static com.github.tomakehurst.wiremock.common.ResourceUtil.getResource;
+import static com.github.tomakehurst.wiremock.core.WireMockApp.ADMIN_CONTEXT_ROOT;
+import static com.github.tomakehurst.wiremock.jetty11.Jetty11Utils.createHttpConfig;
 import static com.github.tomakehurst.wiremock.jetty11.SslContexts.buildManInTheMiddleSslContextFactory;
+import static java.util.concurrent.Executors.newScheduledThreadPool;
 
+import com.github.tomakehurst.wiremock.common.AsynchronousResponseSettings;
+import com.github.tomakehurst.wiremock.common.FileSource;
 import com.github.tomakehurst.wiremock.common.HttpsSettings;
 import com.github.tomakehurst.wiremock.common.JettySettings;
+import com.github.tomakehurst.wiremock.common.Notifier;
 import com.github.tomakehurst.wiremock.core.Options;
 import com.github.tomakehurst.wiremock.http.AdminRequestHandler;
+import com.github.tomakehurst.wiremock.http.RequestHandler;
 import com.github.tomakehurst.wiremock.http.StubRequestHandler;
-import com.github.tomakehurst.wiremock.jetty.DefaultMultipartRequestConfigurer;
+import com.github.tomakehurst.wiremock.jetty.JettyFaultInjectorFactory;
 import com.github.tomakehurst.wiremock.jetty.JettyHttpServer;
+import com.github.tomakehurst.wiremock.jetty.JettyHttpUtils;
+import com.github.tomakehurst.wiremock.servlet.ContentTypeSettingFilter;
+import com.github.tomakehurst.wiremock.servlet.FaultInjectorFactory;
 import com.github.tomakehurst.wiremock.servlet.MultipartRequestConfigurer;
+import com.github.tomakehurst.wiremock.servlet.NotMatchedServlet;
+import com.github.tomakehurst.wiremock.servlet.TrailingSlashFilter;
+import com.github.tomakehurst.wiremock.servlet.WireMockHandlerDispatchingServlet;
+import jakarta.servlet.DispatcherType;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import java.util.Arrays;
+import java.util.EnumSet;
+import java.util.Map;
+import java.util.Objects;
+import java.util.stream.Stream;
 import org.eclipse.jetty.alpn.server.ALPNServerConnectionFactory;
 import org.eclipse.jetty.http.HttpVersion;
+import org.eclipse.jetty.http.MimeTypes;
 import org.eclipse.jetty.http2.server.HTTP2CServerConnectionFactory;
 import org.eclipse.jetty.http2.server.HTTP2ServerConnectionFactory;
 import org.eclipse.jetty.io.NetworkTrafficListener;
 import org.eclipse.jetty.server.*;
+import org.eclipse.jetty.server.handler.AbstractHandler;
 import org.eclipse.jetty.server.handler.HandlerCollection;
+import org.eclipse.jetty.server.handler.gzip.GzipHandler;
+import org.eclipse.jetty.servlet.DefaultServlet;
+import org.eclipse.jetty.servlet.FilterHolder;
+import org.eclipse.jetty.servlet.ServletContextHandler;
+import org.eclipse.jetty.servlet.ServletHolder;
+import org.eclipse.jetty.servlets.CrossOriginFilter;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
 
 public class Jetty11HttpServer extends JettyHttpServer {
@@ -46,78 +77,71 @@ public class Jetty11HttpServer extends JettyHttpServer {
   }
 
   @Override
-  protected MultipartRequestConfigurer buildMultipartRequestConfigurer() {
-    return new DefaultMultipartRequestConfigurer();
-  }
-
-  @Override
-  protected HttpConfiguration createHttpConfig(JettySettings jettySettings) {
-    HttpConfiguration httpConfig = super.createHttpConfig(jettySettings);
-    httpConfig.setSendXPoweredBy(false);
-    httpConfig.setSendServerVersion(false);
-    httpConfig.addCustomizer(new SecureRequestCustomizer(false));
-    return httpConfig;
-  }
-
-  @Override
   protected ServerConnector createHttpConnector(
       String bindAddress, int port, JettySettings jettySettings, NetworkTrafficListener listener) {
 
     HttpConfiguration httpConfig = createHttpConfig(jettySettings);
 
-    HTTP2CServerConnectionFactory h2c = new HTTP2CServerConnectionFactory(httpConfig);
+    ConnectionFactory[] connectionFactories =
+        Stream.of(
+                new HttpConnectionFactory(httpConfig),
+                options.getHttp2PlainDisabled()
+                    ? null
+                    : new HTTP2CServerConnectionFactory(httpConfig))
+            .filter(Objects::nonNull)
+            .toArray(ConnectionFactory[]::new);
 
-    return createServerConnector(
-        bindAddress, jettySettings, port, listener, new HttpConnectionFactory(httpConfig), h2c);
+    return Jetty11Utils.createServerConnector(
+        jettyServer, bindAddress, jettySettings, port, listener, connectionFactories);
   }
 
   @Override
   protected ServerConnector createHttpsConnector(
-      Server server,
       String bindAddress,
       HttpsSettings httpsSettings,
       JettySettings jettySettings,
       NetworkTrafficListener listener) {
-    SslContextFactory.Server http2SslContextFactory =
-        SslContexts.buildHttp2SslContextFactory(httpsSettings);
 
     HttpConfiguration httpConfig = createHttpConfig(jettySettings);
 
-    HttpConnectionFactory http = new HttpConnectionFactory(httpConfig);
-    HTTP2ServerConnectionFactory h2 = new HTTP2ServerConnectionFactory(httpConfig);
-
     ConnectionFactory[] connectionFactories;
-    try {
-      ALPNServerConnectionFactory alpn = new ALPNServerConnectionFactory();
 
-      SslConnectionFactory ssl =
-          new SslConnectionFactory(http2SslContextFactory, alpn.getProtocol());
+    if (!options.getHttp2TlsDisabled()) {
 
-      connectionFactories = new ConnectionFactory[] {ssl, alpn, h2, http};
-    } catch (IllegalStateException e) {
-      SslConnectionFactory ssl =
-          new SslConnectionFactory(http2SslContextFactory, http.getProtocol());
+      SslContextFactory.Server http2SslContextFactory =
+          SslContexts.buildHttp2SslContextFactory(httpsSettings);
 
+      HttpConnectionFactory http = new HttpConnectionFactory(httpConfig);
+      HTTP2ServerConnectionFactory h2 = new HTTP2ServerConnectionFactory(httpConfig);
+
+      try {
+        ALPNServerConnectionFactory alpn = new ALPNServerConnectionFactory();
+
+        SslConnectionFactory ssl =
+            new SslConnectionFactory(http2SslContextFactory, alpn.getProtocol());
+
+        connectionFactories = new ConnectionFactory[] {ssl, alpn, h2, http};
+      } catch (IllegalStateException e) {
+        SslConnectionFactory ssl =
+            new SslConnectionFactory(http2SslContextFactory, http.getProtocol());
+
+        connectionFactories = new ConnectionFactory[] {ssl, http};
+      }
+    } else {
+      final SslContextFactory.Server sslContextFactory =
+          SslContexts.buildHttp1_1SslContextFactory(httpsSettings);
+      final SslConnectionFactory ssl = new SslConnectionFactory(sslContextFactory, "http/1.1");
+      final HttpConnectionFactory http = new HttpConnectionFactory(httpConfig);
       connectionFactories = new ConnectionFactory[] {ssl, http};
     }
 
-    return createServerConnector(
-        bindAddress, jettySettings, httpsSettings.port(), listener, connectionFactories);
-  }
-
-  @Override
-  protected HandlerCollection createHandler(
-      Options options,
-      AdminRequestHandler adminRequestHandler,
-      StubRequestHandler stubRequestHandler) {
-    HandlerCollection handler =
-        super.createHandler(options, adminRequestHandler, stubRequestHandler);
-
-    if (options.browserProxySettings().enabled()) {
-      handler.prependHandler(new ManInTheMiddleSslConnectHandler(mitmProxyConnector));
-    }
-
-    return handler;
+    return Jetty11Utils.createServerConnector(
+        jettyServer,
+        bindAddress,
+        jettySettings,
+        httpsSettings.port(),
+        listener,
+        connectionFactories);
   }
 
   @Override
@@ -157,9 +181,225 @@ public class Jetty11HttpServer extends JettyHttpServer {
           new NetworkTrafficServerConnector(jettyServer, null, null, null, 2, 2, ssl, http);
 
       mitmProxyConnector.setPort(0);
-      mitmProxyConnector.setShutdownIdleTimeout(jettySettings.getShutdownIdleTimeout().or(100L));
+      mitmProxyConnector.setShutdownIdleTimeout(
+          jettySettings.getShutdownIdleTimeout().orElse(100L));
 
       jettyServer.addConnector(mitmProxyConnector);
+    }
+  }
+
+  @Override
+  protected Handler createHandler(
+      Options options,
+      AdminRequestHandler adminRequestHandler,
+      StubRequestHandler stubRequestHandler) {
+    Notifier notifier = options.notifier();
+    ServletContextHandler adminContext = addAdminContext(adminRequestHandler, notifier);
+    ServletContextHandler mockServiceContext =
+        addMockServiceContext(
+            stubRequestHandler,
+            options.filesRoot(),
+            options.getAsynchronousResponseSettings(),
+            options.getChunkedEncodingPolicy(),
+            options.getStubCorsEnabled(),
+            options.browserProxySettings().enabled(),
+            notifier);
+
+    HandlerCollection handlers = new HandlerCollection();
+    AbstractHandler asyncTimeoutSettingHandler =
+        new AbstractHandler() {
+          @Override
+          public void handle(
+              final String target,
+              final Request baseRequest,
+              final HttpServletRequest request,
+              final HttpServletResponse response) {
+            baseRequest.getHttpChannel().getState().setTimeout(options.timeout());
+          }
+        };
+    handlers.setHandlers(
+        Stream.concat(
+                Arrays.stream(extensionHandlers()),
+                Stream.of(adminContext, asyncTimeoutSettingHandler))
+            .toArray(Handler[]::new));
+
+    if (options.getGzipDisabled()) {
+      handlers.addHandler(mockServiceContext);
+    } else {
+      addGZipHandler(mockServiceContext, handlers);
+    }
+
+    if (options.browserProxySettings().enabled()) {
+      handlers.prependHandler(new HttpsProxyDetectingHandler(mitmProxyConnector));
+      handlers.prependHandler(new ManInTheMiddleSslConnectHandler(mitmProxyConnector));
+    }
+
+    return handlers;
+  }
+
+  private ServletContextHandler addMockServiceContext(
+      StubRequestHandler stubRequestHandler,
+      FileSource fileSource,
+      AsynchronousResponseSettings asynchronousResponseSettings,
+      Options.ChunkedEncodingPolicy chunkedEncodingPolicy,
+      boolean stubCorsEnabled,
+      boolean browserProxyingEnabled,
+      Notifier notifier) {
+    ServletContextHandler mockServiceContext = new ServletContextHandler(jettyServer, "/");
+
+    decorateMockServiceContextBeforeConfig(mockServiceContext);
+
+    mockServiceContext.setInitParameter("org.eclipse.jetty.servlet.Default.maxCacheSize", "0");
+    mockServiceContext.setInitParameter(
+        "org.eclipse.jetty.servlet.Default.resourceBase", fileSource.getPath());
+    mockServiceContext.setInitParameter("org.eclipse.jetty.servlet.Default.dirAllowed", "false");
+
+    mockServiceContext.addServlet(DefaultServlet.class, FILES_URL_MATCH);
+
+    final Jetty11HttpUtils utils = new Jetty11HttpUtils();
+    mockServiceContext.setAttribute(JettyHttpUtils.class.getName(), utils);
+
+    mockServiceContext.setAttribute(
+        JettyFaultInjectorFactory.class.getName(), new JettyFaultInjectorFactory(utils));
+    mockServiceContext.setAttribute(StubRequestHandler.class.getName(), stubRequestHandler);
+    mockServiceContext.setAttribute(Notifier.KEY, notifier);
+    mockServiceContext.setAttribute(
+        Options.ChunkedEncodingPolicy.class.getName(), chunkedEncodingPolicy);
+    mockServiceContext.setAttribute("browserProxyingEnabled", browserProxyingEnabled);
+    ServletHolder servletHolder =
+        mockServiceContext.addServlet(WireMockHandlerDispatchingServlet.class, "/");
+    servletHolder.setInitOrder(1);
+    servletHolder.setInitParameter(
+        RequestHandler.HANDLER_CLASS_KEY, StubRequestHandler.class.getName());
+    servletHolder.setInitParameter(
+        FaultInjectorFactory.INJECTOR_CLASS_KEY, JettyFaultInjectorFactory.class.getName());
+    servletHolder.setInitParameter(
+        WireMockHandlerDispatchingServlet.SHOULD_FORWARD_TO_FILES_CONTEXT, "true");
+
+    if (asynchronousResponseSettings.isEnabled()) {
+      scheduledExecutorService = newScheduledThreadPool(asynchronousResponseSettings.getThreads());
+      mockServiceContext.setAttribute(
+          WireMockHandlerDispatchingServlet.ASYNCHRONOUS_RESPONSE_EXECUTOR,
+          scheduledExecutorService);
+    }
+
+    mockServiceContext.setAttribute(
+        MultipartRequestConfigurer.KEY, buildMultipartRequestConfigurer());
+
+    MimeTypes mimeTypes = new MimeTypes();
+    mimeTypes.addMimeMapping("json", "application/json");
+    mimeTypes.addMimeMapping("html", "text/html");
+    mimeTypes.addMimeMapping("xml", "application/xml");
+    mimeTypes.addMimeMapping("txt", "text/plain");
+    mockServiceContext.setMimeTypes(mimeTypes);
+    mockServiceContext.setWelcomeFiles(
+        new String[] {"index.json", "index.html", "index.xml", "index.txt"});
+
+    NotFoundHandler errorHandler = new NotFoundHandler(mockServiceContext);
+    mockServiceContext.setErrorHandler(errorHandler);
+
+    mockServiceContext.addFilter(
+        ContentTypeSettingFilter.class, FILES_URL_MATCH, EnumSet.of(DispatcherType.FORWARD));
+    mockServiceContext.addFilter(
+        TrailingSlashFilter.class, FILES_URL_MATCH, EnumSet.allOf(DispatcherType.class));
+
+    if (stubCorsEnabled) {
+      addCorsFilter(mockServiceContext);
+    }
+
+    decorateMockServiceContextAfterConfig(mockServiceContext);
+
+    return mockServiceContext;
+  }
+
+  protected void decorateMockServiceContextBeforeConfig(ServletContextHandler mockServiceContext) {}
+
+  protected void decorateMockServiceContextAfterConfig(ServletContextHandler mockServiceContext) {}
+
+  private ServletContextHandler addAdminContext(
+      AdminRequestHandler adminRequestHandler, Notifier notifier) {
+    ServletContextHandler adminContext = new ServletContextHandler(jettyServer, ADMIN_CONTEXT_ROOT);
+
+    decorateAdminServiceContextBeforeConfig(adminContext);
+
+    adminContext.setInitParameter("org.eclipse.jetty.servlet.Default.maxCacheSize", "0");
+
+    String javaVendor = System.getProperty("java.vendor");
+    if (javaVendor != null && javaVendor.toLowerCase().contains("android")) {
+      // Special case for Android, fixes IllegalArgumentException("resource assets not found."):
+      //  The Android ClassLoader apparently does not resolve directories.
+      //  Furthermore, lib assets will be merged into a single asset directory when a jar file is
+      // assimilated into an apk.
+      //  As resources can be addressed like "assets/swagger-ui/index.html", a static path element
+      // will suffice.
+      adminContext.setInitParameter("org.eclipse.jetty.servlet.Default.resourceBase", "assets");
+    } else {
+      adminContext.setInitParameter(
+          "org.eclipse.jetty.servlet.Default.resourceBase",
+          getResource(JettyHttpServer.class, "assets").toString());
+    }
+
+    getResource(JettyHttpServer.class, "assets/swagger-ui/index.html");
+
+    adminContext.setInitParameter("org.eclipse.jetty.servlet.Default.dirAllowed", "false");
+    ServletHolder swaggerUiServletHolder =
+        adminContext.addServlet(DefaultServlet.class, "/swagger-ui/*");
+    swaggerUiServletHolder.setAsyncSupported(false);
+    adminContext.addServlet(DefaultServlet.class, "/recorder/*");
+
+    ServletHolder servletHolder =
+        adminContext.addServlet(WireMockHandlerDispatchingServlet.class, "/");
+    servletHolder.setInitParameter(
+        RequestHandler.HANDLER_CLASS_KEY, AdminRequestHandler.class.getName());
+    adminContext.setAttribute(AdminRequestHandler.class.getName(), adminRequestHandler);
+    adminContext.setAttribute(Notifier.KEY, notifier);
+
+    adminContext.setAttribute(MultipartRequestConfigurer.KEY, buildMultipartRequestConfigurer());
+
+    adminContext.addServlet(NotMatchedServlet.class, "/not-matched");
+
+    addCorsFilter(adminContext);
+
+    decorateAdminServiceContextAfterConfig(adminContext);
+
+    return adminContext;
+  }
+
+  protected void decorateAdminServiceContextBeforeConfig(
+      ServletContextHandler adminServiceContext) {}
+
+  protected void decorateAdminServiceContextAfterConfig(
+      ServletContextHandler adminServiceContext) {}
+
+  private void addCorsFilter(ServletContextHandler context) {
+    context.addFilter(buildCorsFilter(), "/*", EnumSet.of(DispatcherType.REQUEST));
+  }
+
+  private FilterHolder buildCorsFilter() {
+    FilterHolder filterHolder = new FilterHolder(CrossOriginFilter.class);
+    filterHolder.setInitParameters(
+        Map.of(
+            "chainPreflight",
+            "false",
+            "allowedOrigins",
+            "*",
+            "allowedHeaders",
+            "*",
+            "allowedMethods",
+            "OPTIONS,GET,POST,PUT,PATCH,DELETE"));
+    return filterHolder;
+  }
+
+  private void addGZipHandler(
+      ServletContextHandler mockServiceContext, HandlerCollection handlers) {
+    try {
+      GzipHandler gzipHandler = new GzipHandler();
+      gzipHandler.addIncludedMethods(GZIPPABLE_METHODS);
+      gzipHandler.setHandler(mockServiceContext);
+      gzipHandler.setVary(null);
+      handlers.addHandler(gzipHandler);
+    } catch (Exception e) {
+      throwUnchecked(e);
     }
   }
 }

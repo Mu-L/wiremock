@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021 Thomas Akehurst
+ * Copyright (C) 2018-2023 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,24 +15,19 @@
  */
 package com.github.tomakehurst.wiremock.extension.responsetemplating.helpers;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.*;
+import static org.assertj.core.api.Assertions.assertThat;
 
-import com.fasterxml.jackson.databind.util.ISO8601DateFormat;
 import com.github.jknack.handlebars.Options;
-import com.google.common.collect.ImmutableMap;
 import java.io.IOException;
-import java.text.DateFormat;
 import java.time.Instant;
+import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Date;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 public class ParseDateHelperTest {
-
-  private static final DateFormat df = new ISO8601DateFormat();
-
   private ParseDateHelper helper;
 
   @BeforeEach
@@ -42,69 +37,66 @@ public class ParseDateHelperTest {
 
   @Test
   public void parsesAnISO8601DateWhenNoFormatSpecified() throws Exception {
-    ImmutableMap<String, Object> optionsHash = ImmutableMap.of();
+    Map<String, Object> optionsHash = Map.of();
 
     String inputDate = "2018-05-01T01:02:03Z";
     Object output = render(inputDate, optionsHash);
 
-    Date expectedDate = df.parse(inputDate);
-    assertThat(output, instanceOf(Date.class));
-    assertThat(((Date) output), is((expectedDate)));
+    Date expectedDate = Date.from(ZonedDateTime.parse(inputDate).toInstant());
+    assertThat(output).isInstanceOf(Date.class);
+    assertThat(output).isEqualTo(expectedDate);
   }
 
   @Test
   public void parsesAnRFC1123DateWhenNoFormatSpecified() throws Exception {
-    ImmutableMap<String, Object> optionsHash = ImmutableMap.of();
+    Map<String, Object> optionsHash = Map.of();
 
     String inputDate = "Tue, 01 Jun 2021 15:16:17 GMT";
     Object output = render(inputDate, optionsHash);
 
     Date expectedDate =
         Date.from(Instant.from(DateTimeFormatter.RFC_1123_DATE_TIME.parse(inputDate)));
-    assertThat(output, instanceOf(Date.class));
-    assertThat(((Date) output), is(expectedDate));
+    assertThat(output).isInstanceOf(Date.class);
+    assertThat(output).isEqualTo(expectedDate);
   }
 
   @Test
   public void parsesDateWithSuppliedFormat() throws Exception {
-    ImmutableMap<String, Object> optionsHash =
-        ImmutableMap.<String, Object>of("format", "dd/MM/yyyy");
+    Map<String, Object> optionsHash = Map.of("format", "dd/MM/yyyy");
 
     String inputDate = "01/02/2003";
     Object output = render(inputDate, optionsHash);
 
     Date expectedDate = Date.from(Instant.parse("2003-02-01T00:00:00Z"));
-    assertThat(output, instanceOf(Date.class));
-    assertThat(((Date) output), is((expectedDate)));
+    assertThat(output).isInstanceOf(Date.class);
+    assertThat(output).isEqualTo(expectedDate);
   }
 
   @Test
   public void parsesLocalDateTimeWithSuppliedFormat() throws Exception {
-    ImmutableMap<String, Object> optionsHash =
-        ImmutableMap.<String, Object>of("format", "dd/MM/yyyy HH:mm:ss");
+    Map<String, Object> optionsHash = Map.of("format", "dd/MM/yyyy HH:mm:ss");
 
     String inputDate = "01/02/2003 05:06:07";
     Object output = render(inputDate, optionsHash);
 
     Date expectedDate = Date.from(Instant.parse("2003-02-01T05:06:07Z"));
-    assertThat(output, instanceOf(Date.class));
-    assertThat(((Date) output), is((expectedDate)));
+    assertThat(output).isInstanceOf(Date.class);
+    assertThat(output).isEqualTo(expectedDate);
   }
 
   @Test
   public void parsesDateTimeWithEpochFormat() throws Exception {
-    ImmutableMap<String, Object> optionsHash = ImmutableMap.<String, Object>of("format", "epoch");
+    Map<String, Object> optionsHash = Map.of("format", "epoch");
 
     String inputDate = "1577964091000";
     Object output = render(inputDate, optionsHash);
 
     Date expectedDate = Date.from(Instant.parse("2020-01-02T11:21:31Z"));
-    assertThat(output, instanceOf(Date.class));
-    assertThat(((Date) output), is((expectedDate)));
+    assertThat(output).isInstanceOf(Date.class);
+    assertThat(output).isEqualTo(expectedDate);
   }
 
-  private Object render(String context, ImmutableMap<String, Object> optionsHash)
-      throws IOException {
+  private Object render(String context, Map<String, Object> optionsHash) throws IOException {
     return helper.apply(
         context, new Options.Builder(null, null, null, null, null).setHash(optionsHash).build());
   }

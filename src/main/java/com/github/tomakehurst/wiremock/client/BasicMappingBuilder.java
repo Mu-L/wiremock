@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2023 Thomas Akehurst
+ * Copyright (C) 2011-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,25 +16,29 @@
 package com.github.tomakehurst.wiremock.client;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
-import static com.google.common.base.MoreObjects.firstNonNull;
-import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.collect.Lists.newArrayList;
+import static com.github.tomakehurst.wiremock.common.ParameterUtils.checkParameter;
+import static com.github.tomakehurst.wiremock.common.ParameterUtils.checkState;
+import static com.github.tomakehurst.wiremock.common.ParameterUtils.getFirstNonNull;
 
 import com.github.tomakehurst.wiremock.common.Metadata;
 import com.github.tomakehurst.wiremock.extension.Parameters;
 import com.github.tomakehurst.wiremock.extension.PostServeActionDefinition;
+import com.github.tomakehurst.wiremock.extension.ServeEventListener;
+import com.github.tomakehurst.wiremock.extension.ServeEventListenerDefinition;
 import com.github.tomakehurst.wiremock.http.Request;
 import com.github.tomakehurst.wiremock.http.RequestMethod;
 import com.github.tomakehurst.wiremock.http.ResponseDefinition;
 import com.github.tomakehurst.wiremock.matching.*;
 import com.github.tomakehurst.wiremock.stubbing.StubMapping;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 class BasicMappingBuilder implements ScenarioMappingBuilder {
 
-  private RequestPatternBuilder requestPatternBuilder;
+  private final RequestPatternBuilder requestPatternBuilder;
   private ResponseDefinitionBuilder responseDefBuilder;
   private Integer priority;
   private String scenarioName;
@@ -43,7 +47,8 @@ class BasicMappingBuilder implements ScenarioMappingBuilder {
   private UUID id = UUID.randomUUID();
   private String name;
   private Boolean isPersistent = null;
-  private List<PostServeActionDefinition> postServeActions = newArrayList();
+  private List<PostServeActionDefinition> postServeActions = new ArrayList<>();
+  private List<ServeEventListenerDefinition> serveEventListeners = new ArrayList<>();
   private Metadata metadata;
 
   BasicMappingBuilder(RequestMethod method, UrlPattern urlPattern) {
@@ -95,6 +100,12 @@ class BasicMappingBuilder implements ScenarioMappingBuilder {
   }
 
   @Override
+  public BasicMappingBuilder withHeader(String key, MultiValuePattern headerPattern) {
+    requestPatternBuilder.withHeader(key, headerPattern);
+    return this;
+  }
+
+  @Override
   public BasicMappingBuilder withCookie(String name, StringValuePattern cookieValuePattern) {
     requestPatternBuilder.withCookie(name, cookieValuePattern);
     return this;
@@ -107,6 +118,24 @@ class BasicMappingBuilder implements ScenarioMappingBuilder {
   }
 
   @Override
+  public BasicMappingBuilder withQueryParam(String key, MultiValuePattern queryParamPattern) {
+    requestPatternBuilder.withQueryParam(key, queryParamPattern);
+    return this;
+  }
+
+  @Override
+  public ScenarioMappingBuilder withFormParam(String key, StringValuePattern formParamPattern) {
+    requestPatternBuilder.withFormParam(key, formParamPattern);
+    return this;
+  }
+
+  @Override
+  public ScenarioMappingBuilder withFormParam(String key, MultiValuePattern formParamPattern) {
+    requestPatternBuilder.withFormParam(key, formParamPattern);
+    return this;
+  }
+
+  @Override
   public BasicMappingBuilder withPathParam(String key, StringValuePattern pathParamPattern) {
     requestPatternBuilder.withPathParam(key, pathParamPattern);
     return this;
@@ -114,8 +143,9 @@ class BasicMappingBuilder implements ScenarioMappingBuilder {
 
   @Override
   public BasicMappingBuilder withQueryParams(Map<String, StringValuePattern> queryParams) {
-    for (Map.Entry<String, StringValuePattern> queryParam : queryParams.entrySet())
+    for (Map.Entry<String, StringValuePattern> queryParam : queryParams.entrySet()) {
       requestPatternBuilder.withQueryParam(queryParam.getKey(), queryParam.getValue());
+    }
     return this;
   }
 
@@ -134,7 +164,7 @@ class BasicMappingBuilder implements ScenarioMappingBuilder {
 
   @Override
   public BasicMappingBuilder inScenario(String scenarioName) {
-    checkArgument(scenarioName != null, "Scenario name must not be null");
+    checkParameter(scenarioName != null, "Scenario name must not be null");
 
     this.scenarioName = scenarioName;
     return this;
@@ -184,10 +214,29 @@ class BasicMappingBuilder implements ScenarioMappingBuilder {
 
   @Override
   public <P> BasicMappingBuilder withPostServeAction(String extensionName, P parameters) {
-    Parameters params =
-        parameters instanceof Parameters ? (Parameters) parameters : Parameters.of(parameters);
-    postServeActions.add(new PostServeActionDefinition(extensionName, params));
+    postServeActions.add(
+        new PostServeActionDefinition(extensionName, resolveParameters(parameters)));
     return this;
+  }
+
+  @Override
+  public <P> MappingBuilder withServeEventListener(
+      Set<ServeEventListener.RequestPhase> requestPhases, String extensionName, P parameters) {
+    serveEventListeners.add(
+        new ServeEventListenerDefinition(
+            extensionName, requestPhases, resolveParameters(parameters)));
+    return this;
+  }
+
+  @Override
+  public <P> MappingBuilder withServeEventListener(String extensionName, P parameters) {
+    serveEventListeners.add(
+        new ServeEventListenerDefinition(extensionName, resolveParameters(parameters)));
+    return this;
+  }
+
+  private static <P> Parameters resolveParameters(P parameters) {
+    return parameters instanceof Parameters ? (Parameters) parameters : Parameters.of(parameters);
   }
 
   @Override
@@ -227,13 +276,22 @@ class BasicMappingBuilder implements ScenarioMappingBuilder {
   }
 
   @Override
+  public BasicMappingBuilder andMatching(CustomMatcherDefinition matcherDefinition) {
+    requestPatternBuilder.andMatching(matcherDefinition);
+    return this;
+  }
+
+  private boolean requiredScenarioExist() {
+    return scenarioName == null && (requiredScenarioState != null || newScenarioState != null);
+  }
+
+  @Override
   public StubMapping build() {
-    if (scenarioName == null && (requiredScenarioState != null || newScenarioState != null)) {
-      throw new IllegalStateException(
-          "Scenario name must be specified to require or set a new scenario state");
-    }
+    checkState(
+        !requiredScenarioExist(),
+        "Scenario name must be specified to require or set a new scenario state");
     RequestPattern requestPattern = requestPatternBuilder.build();
-    ResponseDefinition response = firstNonNull(responseDefBuilder, aResponse()).build();
+    ResponseDefinition response = getFirstNonNull(responseDefBuilder, aResponse()).build();
     StubMapping mapping = new StubMapping(requestPattern, response);
     mapping.setPriority(priority);
     mapping.setScenarioName(scenarioName);
@@ -244,6 +302,8 @@ class BasicMappingBuilder implements ScenarioMappingBuilder {
     mapping.setPersistent(isPersistent);
 
     mapping.setPostServeActions(postServeActions.isEmpty() ? null : postServeActions);
+    mapping.setServeEventListenerDefinitions(
+        serveEventListeners.isEmpty() ? null : serveEventListeners);
 
     mapping.setMetadata(metadata);
 

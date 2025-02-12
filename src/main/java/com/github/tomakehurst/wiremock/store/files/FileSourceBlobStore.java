@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022 Thomas Akehurst
+ * Copyright (C) 2022-2023 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,13 +15,20 @@
  */
 package com.github.tomakehurst.wiremock.store.files;
 
+import static com.github.tomakehurst.wiremock.common.Exceptions.throwUnchecked;
+import static com.github.tomakehurst.wiremock.common.LocalNotifier.notifier;
+
 import com.github.tomakehurst.wiremock.common.*;
 import com.github.tomakehurst.wiremock.store.BlobStore;
+import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.InputStream;
 import java.util.Optional;
 import java.util.stream.Stream;
+import org.wiremock.annotations.Beta;
 
-public class FileSourceBlobStore implements BlobStore {
+@Beta(justification = "Externalized State API: https://github.com/wiremock/wiremock/issues/2144")
+public class FileSourceBlobStore implements BlobStore, PathBased {
 
   private final FileSource fileSource;
 
@@ -35,7 +42,17 @@ public class FileSourceBlobStore implements BlobStore {
 
   @Override
   public Optional<InputStream> getStream(String key) {
-    return Optional.of(fileSource.getBinaryFileNamed(key).getStream());
+    try {
+      return Optional.of(fileSource.getBinaryFileNamed(key).getStream());
+    } catch (Exception exception) {
+      if (!(exception instanceof FileNotFoundException)) {
+        notifier()
+            .error("Error when working with FileSource:\n" + Json.write(exception.getMessage()));
+        return Optional.of(throwUnchecked(exception, InputStream.class));
+      } else {
+        return Optional.empty();
+      }
+    }
   }
 
   @Override
@@ -45,12 +62,25 @@ public class FileSourceBlobStore implements BlobStore {
 
   @Override
   public Stream<String> getAllKeys() {
-    return fileSource.listFilesRecursively().stream().map(TextFile::getPath);
+    final String rootPath = new File(fileSource.getUri().getSchemeSpecificPart()).getPath();
+    return fileSource.listFilesRecursively().stream()
+        .map(TextFile::getPath)
+        .map(path -> path.substring(rootPath.length() + 1));
   }
 
   @Override
   public Optional<byte[]> get(String key) {
-    return Optional.of(fileSource.getBinaryFileNamed(key).readContents());
+    try {
+      return Optional.of(fileSource.getBinaryFileNamed(key).readContents());
+    } catch (Exception exception) {
+      if (!(exception instanceof FileNotFoundException)) {
+        notifier()
+            .error("Error when working with FileSource:\n" + Json.write(exception.getMessage()));
+        return Optional.of(throwUnchecked(exception, byte[].class));
+      } else {
+        return Optional.empty();
+      }
+    }
   }
 
   @Override
@@ -66,5 +96,14 @@ public class FileSourceBlobStore implements BlobStore {
   @Override
   public void clear() {
     fileSource.listFilesRecursively().forEach(file -> fileSource.deleteFile(file.getPath()));
+  }
+
+  public FileSource getFileSource() {
+    return fileSource;
+  }
+
+  @Override
+  public String getPath() {
+    return fileSource.getPath();
   }
 }

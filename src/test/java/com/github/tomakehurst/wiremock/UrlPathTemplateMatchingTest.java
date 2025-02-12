@@ -17,10 +17,12 @@ package com.github.tomakehurst.wiremock;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.is;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.github.tomakehurst.wiremock.common.InvalidInputException;
+import com.github.tomakehurst.wiremock.testsupport.WireMockResponse;
 import org.junit.jupiter.api.Test;
 
 public class UrlPathTemplateMatchingTest extends AcceptanceTestBase {
@@ -48,6 +50,40 @@ public class UrlPathTemplateMatchingTest extends AcceptanceTestBase {
     assertThat(testClient.get("/v1/contacts/12345/addresses/55555").statusCode(), is(404));
     assertThat(testClient.get("/v1/contacts/23456/addresses/99876").statusCode(), is(404));
     assertThat(testClient.get("/v1/contacts/23456/addresses/55555").statusCode(), is(404));
+  }
+
+  @Test
+  void returns_non_match_without_error_when_request_url_path_does_not_match_template() {
+    stubFor(
+        get(urlPathTemplate("/contacts/{contactId}/addresses/{addressId}"))
+            .withPathParam("contactId", equalTo("123"))
+            .willReturn(ok()));
+
+    WireMockResponse response = testClient.get("/contacts/123/addresssssses/1");
+    assertThat(response.content(), containsString("Request was not matched"));
+    assertThat(response.statusCode(), is(404));
+  }
+
+  @Test
+  void correctly_matches_when_query_parameters_present_in_request_and_last_path_node_is_variable() {
+    stubFor(
+        get(urlPathTemplate("/contacts/{contactId}"))
+            .withPathParam("contactId", equalTo("123"))
+            .willReturn(ok()));
+
+    WireMockResponse response = testClient.get("/contacts/123?detail=summary");
+    assertThat(response.statusCode(), is(200));
+  }
+
+  @Test
+  void correctly_matches_when_query_parameters_present_in_request_and_last_path_node_is_constant() {
+    stubFor(
+        get(urlPathTemplate("/contacts/{contactId}/address"))
+            .withPathParam("contactId", equalTo("123"))
+            .willReturn(ok()));
+
+    WireMockResponse response = testClient.get("/contacts/123/address?detail=summary");
+    assertThat(response.statusCode(), is(200));
   }
 
   @Test

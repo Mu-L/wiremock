@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2023 Thomas Akehurst
+ * Copyright (C) 2011-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,31 +17,28 @@ package com.github.tomakehurst.wiremock.verification;
 
 import static com.github.tomakehurst.wiremock.common.Encoding.decodeBase64;
 import static com.github.tomakehurst.wiremock.common.Encoding.encodeBase64;
+import static com.github.tomakehurst.wiremock.common.Lazy.lazy;
+import static com.github.tomakehurst.wiremock.common.ParameterUtils.getFirstNonNull;
 import static com.github.tomakehurst.wiremock.common.Strings.stringFromBytes;
-import static com.github.tomakehurst.wiremock.common.Urls.*;
-import static com.google.common.base.Charsets.UTF_8;
-import static com.google.common.base.MoreObjects.firstNonNull;
-import static com.google.common.collect.FluentIterable.from;
+import static com.github.tomakehurst.wiremock.common.Urls.safelyCreateURL;
+import static com.github.tomakehurst.wiremock.common.Urls.splitQueryFromUrl;
+import static java.nio.charset.StandardCharsets.UTF_8;
 
-import com.fasterxml.jackson.annotation.JsonCreator;
-import com.fasterxml.jackson.annotation.JsonIgnore;
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.*;
 import com.github.tomakehurst.wiremock.common.Dates;
 import com.github.tomakehurst.wiremock.common.Json;
+import com.github.tomakehurst.wiremock.common.Lazy;
+import com.github.tomakehurst.wiremock.common.Urls;
+import com.github.tomakehurst.wiremock.common.url.PathParams;
 import com.github.tomakehurst.wiremock.http.*;
-import com.google.common.base.Optional;
-import com.google.common.base.Predicate;
 import java.net.URL;
 import java.nio.charset.Charset;
-import java.util.Collection;
-import java.util.Date;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class LoggedRequest implements Request {
 
+  private final UUID id;
   private final String scheme;
   private final String host;
   private final int port;
@@ -50,31 +47,42 @@ public class LoggedRequest implements Request {
   private final String clientIp;
   private final RequestMethod method;
   private final HttpHeaders headers;
+  private final PathParams pathParams;
   private final Map<String, Cookie> cookies;
   private final Map<String, QueryParameter> queryParams;
+  private final Map<String, FormParameter> formParameters;
   private final byte[] body;
   private final boolean isBrowserProxyRequest;
   private final Date loggedDate;
   private final Collection<Part> multiparts;
   private final String protocol;
 
+  private final Lazy<String> lazyBodyAsString;
+  private final Lazy<String> lazyBodyAsBase64;
+
   public static LoggedRequest createFrom(Request request) {
     return new LoggedRequest(
+        request.getId(),
+        request.getScheme(),
+        request.getHost(),
+        request.getPort(),
         request.getUrl(),
         request.getAbsoluteUrl(),
         request.getMethod(),
         request.getClientIp(),
         request.getHeaders(),
+        request.getPathParameters(),
         request.getCookies(),
         request.isBrowserProxyRequest(),
         new Date(),
         request.getBody(),
         request.getParts(),
-        request.getProtocol());
+        request.getProtocol(),
+        request.formParameters());
   }
 
   @JsonCreator
-  public LoggedRequest(
+  LoggedRequest(
       @JsonProperty("url") String url,
       @JsonProperty("absoluteUrl") String absoluteUrl,
       @JsonProperty("method") RequestMethod method,
@@ -88,55 +96,78 @@ public class LoggedRequest implements Request {
       @JsonProperty("multiparts") Collection<Part> multiparts,
       @JsonProperty("protocol") String protocol) {
     this(
+        null,
+        null,
+        null,
+        null,
         url,
         absoluteUrl,
         method,
         clientIp,
         headers,
+        PathParams.empty(),
         cookies,
         isBrowserProxyRequest,
         loggedDate,
         decodeBase64(bodyAsBase64),
         multiparts,
-        protocol);
+        protocol,
+        new HashMap<>());
   }
 
-  public LoggedRequest(
+  private LoggedRequest(
+      UUID id,
+      String scheme,
+      String host,
+      Integer port,
       String url,
       String absoluteUrl,
       RequestMethod method,
       String clientIp,
       HttpHeaders headers,
+      PathParams pathParams,
       Map<String, Cookie> cookies,
       boolean isBrowserProxyRequest,
       Date loggedDate,
       byte[] body,
       Collection<Part> multiparts,
-      String protocol) {
+      String protocol,
+      Map<String, FormParameter> formParameters) {
+    this.id = id;
     this.url = url;
 
     this.absoluteUrl = absoluteUrl;
     if (absoluteUrl == null) {
-      this.scheme = null;
-      this.host = null;
-      this.port = -1;
+      this.scheme = scheme;
+      this.host = host;
+      this.port = port != null ? port : -1;
     } else {
       URL fullUrl = safelyCreateURL(absoluteUrl);
       this.scheme = fullUrl.getProtocol();
       this.host = fullUrl.getHost();
-      this.port = fullUrl.getPort();
+      this.port = Urls.getPort(fullUrl);
     }
 
     this.clientIp = clientIp;
     this.method = method;
     this.body = body;
     this.headers = headers;
+    this.pathParams = pathParams;
     this.cookies = cookies;
-    this.queryParams = splitQueryFromUrl(url);
+    this.queryParams = url != null ? splitQueryFromUrl(url) : Collections.emptyMap();
+    this.formParameters = formParameters;
     this.isBrowserProxyRequest = isBrowserProxyRequest;
     this.loggedDate = loggedDate;
     this.multiparts = multiparts;
     this.protocol = protocol;
+
+    lazyBodyAsString = lazy(() -> stringFromBytes(body, encodingFromContentTypeHeaderOrUtf8()));
+    lazyBodyAsBase64 = lazy(() -> encodeBase64(body));
+  }
+
+  @Override
+  public UUID getId() {
+    return id;
   }
 
   @Override
@@ -211,6 +242,12 @@ public class LoggedRequest implements Request {
     return getHeader(key) != null;
   }
 
+  @JsonIgnore
+  @Override
+  public PathParams getPathParameters() {
+    return pathParams;
+  }
+
   @Override
   public Map<String, Cookie> getCookies() {
     return cookies;
@@ -224,13 +261,13 @@ public class LoggedRequest implements Request {
   @Override
   @JsonProperty("body")
   public String getBodyAsString() {
-    return stringFromBytes(body, encodingFromContentTypeHeaderOrUtf8());
+    return lazyBodyAsString.get();
   }
 
   @Override
   @JsonProperty("bodyAsBase64")
   public String getBodyAsBase64() {
-    return encodeBase64(body);
+    return lazyBodyAsBase64.get();
   }
 
   @Override
@@ -241,7 +278,22 @@ public class LoggedRequest implements Request {
 
   @Override
   public QueryParameter queryParameter(String key) {
-    return firstNonNull(queryParams.get(key), QueryParameter.absent(key));
+    return getFirstNonNull(queryParams.get(key), QueryParameter.absent(key));
+  }
+
+  @Override
+  public FormParameter formParameter(String key) {
+    return getFirstNonNull(formParameters.get(key), FormParameter.absent(key));
+  }
+
+  @Override
+  public Map<String, FormParameter> formParameters() {
+    return formParameters;
+  }
+
+  @JsonProperty("formParams")
+  public Map<String, FormParameter> getFormParameters() {
+    return formParameters;
   }
 
   @JsonProperty("queryParams")
@@ -261,7 +313,7 @@ public class LoggedRequest implements Request {
   @JsonIgnore
   @Override
   public Optional<Request> getOriginalRequest() {
-    return Optional.absent();
+    return Optional.empty();
   }
 
   @Override
@@ -269,6 +321,7 @@ public class LoggedRequest implements Request {
     return protocol;
   }
 
+  @JsonFormat(shape = JsonFormat.Shape.NUMBER)
   public Date getLoggedDate() {
     return loggedDate;
   }
@@ -285,7 +338,7 @@ public class LoggedRequest implements Request {
   @JsonIgnore
   @Override
   public boolean isMultipart() {
-    return (multiparts != null && multiparts.size() > 0);
+    return (multiparts != null && !multiparts.isEmpty());
   }
 
   @JsonIgnore
@@ -298,15 +351,10 @@ public class LoggedRequest implements Request {
   @Override
   public Part getPart(final String name) {
     return (multiparts != null && name != null)
-        ? from(multiparts)
-            .firstMatch(
-                new Predicate<Part>() {
-                  @Override
-                  public boolean apply(Part input) {
-                    return (name.equals(input.getName()));
-                  }
-                })
-            .get()
+        ? multiparts.stream()
+            .filter(input -> (name.equals(input.getName())))
+            .findFirst()
+            .orElse(null)
         : null;
   }
 }

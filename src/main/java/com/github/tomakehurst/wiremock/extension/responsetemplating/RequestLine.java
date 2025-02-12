@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2023 Thomas Akehurst
+ * Copyright (C) 2017-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,18 +17,15 @@ package com.github.tomakehurst.wiremock.extension.responsetemplating;
 
 import com.github.tomakehurst.wiremock.common.ListOrSingle;
 import com.github.tomakehurst.wiremock.common.Urls;
-import com.github.tomakehurst.wiremock.common.url.PathTemplate;
-import com.github.tomakehurst.wiremock.http.MultiValue;
+import com.github.tomakehurst.wiremock.common.url.PathParams;
 import com.github.tomakehurst.wiremock.http.QueryParameter;
 import com.github.tomakehurst.wiremock.http.Request;
 import com.github.tomakehurst.wiremock.http.RequestMethod;
-import com.google.common.base.Function;
-import com.google.common.collect.Maps;
 import java.net.URI;
 import java.util.Map;
+import java.util.Map.Entry;
+import java.util.stream.Collectors;
 
-@Deprecated
-/** @deprecated Use the accessors on {@link RequestTemplateModel} */
 public class RequestLine {
   private final RequestMethod method;
   private final String scheme;
@@ -36,8 +33,9 @@ public class RequestLine {
   private final int port;
   private final Map<String, ListOrSingle<String>> query;
   private final String url;
+  private final String clientIp;
 
-  private final PathTemplate pathTemplate;
+  private final PathParams pathParams;
 
   private RequestLine(
       RequestMethod method,
@@ -45,30 +43,36 @@ public class RequestLine {
       String host,
       int port,
       String url,
+      String clientIp,
       Map<String, ListOrSingle<String>> query,
-      PathTemplate pathTemplate) {
+      PathParams pathParams) {
     this.method = method;
     this.scheme = scheme;
     this.host = host;
     this.port = port;
     this.url = url;
+    this.clientIp = clientIp;
     this.query = query;
-    this.pathTemplate = pathTemplate;
+    this.pathParams = pathParams;
   }
 
-  public static RequestLine fromRequest(final Request request, final PathTemplate pathTemplate) {
+  public static RequestLine fromRequest(final Request request) {
     URI url = URI.create(request.getUrl());
     Map<String, QueryParameter> rawQuery = Urls.splitQuery(url);
     Map<String, ListOrSingle<String>> adaptedQuery =
-        Maps.transformValues(rawQuery, TO_TEMPLATE_MODEL);
+        rawQuery.entrySet().stream()
+            .map(entry -> Map.entry(entry.getKey(), ListOrSingle.of(entry.getValue().values())))
+            .collect(Collectors.toMap(Entry::getKey, Entry::getValue));
+
     return new RequestLine(
         request.getMethod(),
         request.getScheme(),
         request.getHost(),
         request.getPort(),
         request.getUrl(),
+        request.getClientIp(),
         adaptedQuery,
-        pathTemplate);
+        request.getPathParameters());
   }
 
   public RequestMethod getMethod() {
@@ -76,7 +80,7 @@ public class RequestLine {
   }
 
   public Object getPathSegments() {
-    return pathTemplate == null ? new UrlPath(url) : new TemplatedUrlPath(url, pathTemplate);
+    return pathParams.isEmpty() ? new UrlPath(url) : new TemplatedUrlPath(url, pathParams);
   }
 
   public String getPath() {
@@ -109,15 +113,11 @@ public class RequestLine {
     return scheme + "://" + host + portPart;
   }
 
+  public String getClientIp() {
+    return this.clientIp;
+  }
+
   private boolean isStandardPort(String scheme, int port) {
     return (scheme.equals("http") && port == 80) || (scheme.equals("https") && port == 443);
   }
-
-  private static final Function<MultiValue, ListOrSingle<String>> TO_TEMPLATE_MODEL =
-      new Function<MultiValue, ListOrSingle<String>>() {
-        @Override
-        public ListOrSingle<String> apply(MultiValue input) {
-          return ListOrSingle.of(input.values());
-        }
-      };
 }

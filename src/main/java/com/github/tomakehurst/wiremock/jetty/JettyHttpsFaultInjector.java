@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014-2022 Thomas Akehurst
+ * Copyright (C) 2014-2024 Thomas Akehurst
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,27 +17,30 @@ package com.github.tomakehurst.wiremock.jetty;
 
 import static com.github.tomakehurst.wiremock.common.Exceptions.throwUnchecked;
 import static com.github.tomakehurst.wiremock.common.LocalNotifier.notifier;
+import static java.nio.charset.StandardCharsets.UTF_8;
 
 import com.github.tomakehurst.wiremock.core.FaultInjector;
-import com.google.common.base.Charsets;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.net.Socket;
+import org.eclipse.jetty.io.EndPoint;
 import org.eclipse.jetty.server.Response;
 import org.eclipse.jetty.util.BufferUtil;
 import org.eclipse.jetty.util.Callback;
 
 public class JettyHttpsFaultInjector implements FaultInjector {
 
-  private static final byte[] GARBAGE =
-      "lskdu018973t09sylgasjkfg1][]'./.sdlv".getBytes(Charsets.UTF_8);
+  private static final byte[] GARBAGE = "lskdu018973t09sylgasjkfg1][]'./.sdlv".getBytes(UTF_8);
 
-  private final Response response;
+  private final HttpServletResponse response;
+  private final EndPoint endpoint;
   private final Socket socket;
 
-  public JettyHttpsFaultInjector(HttpServletResponse response) {
-    this.response = JettyUtils.unwrapResponse(response);
-    this.socket = JettyUtils.getTlsSocket(this.response);
+  public JettyHttpsFaultInjector(HttpServletResponse response, JettyHttpUtils utils) {
+    this.response = response;
+    final Response jettyResponse = utils.unwrapResponse(response);
+    this.endpoint = utils.unwrapEndPoint(jettyResponse);
+    this.socket = utils.tlsSocket(jettyResponse);
   }
 
   @Override
@@ -76,30 +79,26 @@ public class JettyHttpsFaultInjector implements FaultInjector {
   }
 
   private void writeGarbageThenCloseSocket() {
-    response
-        .getHttpOutput()
-        .getHttpChannel()
-        .getEndPoint()
-        .write(
-            new Callback() {
-              @Override
-              public void succeeded() {
-                try {
-                  socket.close();
-                } catch (IOException e) {
-                  notifier().error("Failed to close socket after Garbage write succeeded", e);
-                }
-              }
+    endpoint.write(
+        new Callback() {
+          @Override
+          public void succeeded() {
+            try {
+              socket.close();
+            } catch (IOException e) {
+              notifier().error("Failed to close socket after Garbage write succeeded", e);
+            }
+          }
 
-              @Override
-              public void failed(Throwable x) {
-                try {
-                  socket.close();
-                } catch (IOException e) {
-                  notifier().error("Failed to close socket after Garbage write failed", e);
-                }
-              }
-            },
-            BufferUtil.toBuffer(GARBAGE));
+          @Override
+          public void failed(Throwable x) {
+            try {
+              socket.close();
+            } catch (IOException e) {
+              notifier().error("Failed to close socket after Garbage write failed", e);
+            }
+          }
+        },
+        BufferUtil.toBuffer(GARBAGE));
   }
 }
